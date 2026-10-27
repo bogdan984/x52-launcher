@@ -10,6 +10,7 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,7 +27,11 @@ jobs:
       - name: Сборка программы
         shell: pwsh
         run: |
-          pip install pyinstaller==6.16.0 pygame==2.6.1 vgamepad==0.1.0
+          # setup.py vgamepad 0.1.0 без драйвера запускает интерактивный msiexec и сборка виснет — убираем вызов
+          pip download --no-deps --no-binary :all: vgamepad==0.1.0 -d build/vg
+          tar -xzf build/vg/vgamepad-0.1.0.tar.gz -C build/vg
+          (Get-Content build/vg/vgamepad-0.1.0/setup.py) -replace "subprocess\.call\(\['msiexec'", "(lambda *a, **k: None)(['msiexec'" | Set-Content build/vg/vgamepad-0.1.0/setup.py
+          pip install pyinstaller==6.16.0 pygame==2.6.1 ./build/vg/vgamepad-0.1.0
           python -m PyInstaller --noconfirm --clean --windowed --onedir --noupx `
             --name "X52 Launcher" --icon "$PWD\x52_launcher.ico" --add-data "$PWD\x52_launcher.ico;." `
             --collect-all vgamepad --exclude-module pytest `
