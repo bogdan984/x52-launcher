@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+dist/
+build/work/
+build/redist/
+*.log
+*.zip
+profiles/
+x52_global.json

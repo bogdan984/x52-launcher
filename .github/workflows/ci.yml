@@ -1,0 +1,19 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: sudo apt-get update -q && sudo apt-get install -yq xvfb
+      - run: pip install pytest pygame==2.6.1
+      # колесо мыши в Tk 9 на Linux прокручивается иначе, чем на Windows — тест только для Windows
+      - run: xvfb-run -a python -m pytest -q -p no:cacheprovider --deselect tests/test_ui.py::test_rs_mouse_wheel_scrolls_under_cursor

@@ -1,0 +1,620 @@
+{
+  "version": 3,
+  "profile_name": "ACE COMBAT 8",
+  "game": {
+    "builtin_actions": true,
+    "virtual_pad": true,
+    "launch_type": "steam",
+    "exe_path": ""
+  },
+  "custom_actions": [],
+  "layers": {
+    "enabled": false,
+    "buttons": [
+      {
+        "type": "button",
+        "index": 23
+      },
+      {
+        "type": "button",
+        "index": 24
+      },
+      {
+        "type": "button",
+        "index": 25
+      }
+    ]
+  },
+  "long_press_ms": 500,
+  "sequences": [],
+  "axis_thr": {},
+  "button_names": {},
+  "auto": {
+    "processes": [],
+    "aircraft": []
+  },
+  "device_name": "",
+  "poll_hz": 200,
+  "axes": {
+    "roll": 0,
+    "pitch": 1,
+    "yaw": 5,
+    "throttle": 2,
+    "cam_x": null,
+    "cam_y": null
+  },
+  "invert": {
+    "roll": false,
+    "pitch": true,
+    "yaw": false,
+    "cam_x": false,
+    "cam_y": false
+  },
+  "axes_enabled": {
+    "roll": true,
+    "pitch": true,
+    "yaw": true,
+    "throttle": true,
+    "cam_x": true,
+    "cam_y": true
+  },
+  "response": {
+    "roll": {
+      "deadzone": 0.04,
+      "anti_deadzone": 0.1,
+      "sensitivity": 1.15,
+      "curve": 1.0,
+      "smoothing_ms": 0
+    },
+    "pitch": {
+      "deadzone": 0.04,
+      "anti_deadzone": 0.1,
+      "sensitivity": 1.15,
+      "curve": 1.0,
+      "smoothing_ms": 0
+    },
+    "yaw": {
+      "mode": "hold",
+      "threshold": 0.12,
+      "full": 0.6,
+      "period_ms": 120.0,
+      "min_pulse_ms": 25.0,
+      "delay_ms": 0,
+      "smoothing_ms": 0
+    }
+  },
+  "cam_deadzone": 0.08,
+  "output": {
+    "max_hz": 125,
+    "deadband": 0.01
+  },
+  "throttle_cal": {
+    "raw_aft": 1.0,
+    "raw_forward": -1.0,
+    "neutral_low_raw": 0.15,
+    "neutral_high_raw": -0.15,
+    "recorded": []
+  },
+  "bindings": {
+    "pitch_up": [
+      null,
+      null
+    ],
+    "pitch_down": [
+      null,
+      null
+    ],
+    "roll_left": [
+      null,
+      null
+    ],
+    "roll_right": [
+      null,
+      null
+    ],
+    "yaw_left": [
+      null,
+      null
+    ],
+    "yaw_right": [
+      null,
+      null
+    ],
+    "throttle_up": [
+      null,
+      null
+    ],
+    "throttle_down": [
+      null,
+      null
+    ],
+    "highg": [
+      {
+        "type": "button",
+        "index": 5
+      },
+      null
+    ],
+    "autopilot": [
+      {
+        "type": "button",
+        "index": 8
+      },
+      null
+    ],
+    "gear": [
+      null,
+      null
+    ],
+    "gun": [
+      {
+        "type": "button",
+        "index": 0
+      },
+      null
+    ],
+    "missile": [
+      {
+        "type": "button",
+        "index": 1
+      },
+      null
+    ],
+    "next_weapon": [
+      {
+        "type": "button",
+        "index": 2
+      },
+      null
+    ],
+    "prev_weapon": [
+      null,
+      null
+    ],
+    "std_missile": [
+      null,
+      null
+    ],
+    "special1": [
+      null,
+      null
+    ],
+    "special2": [
+      null,
+      null
+    ],
+    "target": [
+      {
+        "type": "button",
+        "index": 3
+      },
+      null
+    ],
+    "flare": [
+      {
+        "type": "button",
+        "index": 9
+      },
+      null
+    ],
+    "view": [
+      {
+        "type": "button",
+        "index": 6
+      },
+      null
+    ],
+    "cam_mouse": [
+      null,
+      null
+    ],
+    "cam_up": [
+      {
+        "type": "hat",
+        "index": 1,
+        "dir": "up"
+      },
+      null
+    ],
+    "cam_down": [
+      {
+        "type": "hat",
+        "index": 1,
+        "dir": "down"
+      },
+      null
+    ],
+    "cam_left": [
+      {
+        "type": "hat",
+        "index": 1,
+        "dir": "left"
+      },
+      null
+    ],
+    "cam_right": [
+      {
+        "type": "hat",
+        "index": 1,
+        "dir": "right"
+      },
+      null
+    ],
+    "order_attack": [
+      {
+        "type": "hat",
+        "index": 0,
+        "dir": "up"
+      },
+      null
+    ],
+    "order_cover": [
+      {
+        "type": "hat",
+        "index": 0,
+        "dir": "down"
+      },
+      null
+    ],
+    "order_disperse": [
+      {
+        "type": "hat",
+        "index": 0,
+        "dir": "left"
+      },
+      null
+    ],
+    "order_sp": [
+      {
+        "type": "hat",
+        "index": 0,
+        "dir": "right"
+      },
+      null
+    ],
+    "map": [
+      {
+        "type": "button",
+        "index": 7
+      },
+      null
+    ],
+    "pause": [
+      {
+        "type": "button",
+        "index": 10
+      },
+      null
+    ],
+    "boresight": [
+      {
+        "type": "button",
+        "index": 4
+      },
+      null
+    ],
+    "menu_up": [
+      null,
+      null
+    ],
+    "menu_down": [
+      null,
+      null
+    ],
+    "menu_left": [
+      null,
+      null
+    ],
+    "menu_right": [
+      null,
+      null
+    ],
+    "menu_ok": [
+      null,
+      null
+    ],
+    "menu_back": [
+      null,
+      null
+    ],
+    "center_view": [
+      {
+        "type": "button",
+        "index": 11
+      },
+      null
+    ],
+    "toggle_head": [
+      {
+        "type": "button",
+        "index": 12
+      },
+      null
+    ]
+  },
+  "outputs": {
+    "pitch_up": {
+      "via": "key",
+      "keys": [
+        "S"
+      ]
+    },
+    "pitch_down": {
+      "via": "key",
+      "keys": [
+        "W"
+      ]
+    },
+    "roll_left": {
+      "via": "key",
+      "keys": [
+        "A"
+      ]
+    },
+    "roll_right": {
+      "via": "key",
+      "keys": [
+        "D"
+      ]
+    },
+    "yaw_left": {
+      "via": "pad",
+      "keys": [
+        "Q"
+      ]
+    },
+    "yaw_right": {
+      "via": "pad",
+      "keys": [
+        "E"
+      ]
+    },
+    "throttle_up": {
+      "via": "pad",
+      "keys": [
+        "SPACE"
+      ]
+    },
+    "throttle_down": {
+      "via": "pad",
+      "keys": [
+        "LCTRL"
+      ]
+    },
+    "highg": {
+      "via": "pad",
+      "keys": [
+        "SPACE",
+        "LCTRL"
+      ]
+    },
+    "autopilot": {
+      "via": "pad",
+      "keys": [
+        "Z"
+      ]
+    },
+    "gear": {
+      "via": "key",
+      "keys": [
+        "R"
+      ]
+    },
+    "gun": {
+      "via": "pad",
+      "keys": [
+        "J"
+      ]
+    },
+    "missile": {
+      "via": "pad",
+      "keys": [
+        "L"
+      ]
+    },
+    "next_weapon": {
+      "via": "pad",
+      "keys": [
+        "K"
+      ]
+    },
+    "prev_weapon": {
+      "via": "key",
+      "keys": [
+        "I"
+      ]
+    },
+    "std_missile": {
+      "via": "key",
+      "keys": [
+        "1"
+      ]
+    },
+    "special1": {
+      "via": "key",
+      "keys": [
+        "2"
+      ]
+    },
+    "special2": {
+      "via": "key",
+      "keys": [
+        "3"
+      ]
+    },
+    "target": {
+      "via": "pad",
+      "keys": [
+        "T"
+      ]
+    },
+    "flare": {
+      "via": "pad",
+      "keys": [
+        "X"
+      ]
+    },
+    "view": {
+      "via": "pad",
+      "keys": [
+        "V"
+      ]
+    },
+    "cam_mouse": {
+      "via": "key",
+      "keys": [
+        "F"
+      ]
+    },
+    "cam_up": {
+      "via": "pad",
+      "keys": [
+        "7"
+      ]
+    },
+    "cam_down": {
+      "via": "pad",
+      "keys": [
+        "8"
+      ]
+    },
+    "cam_left": {
+      "via": "pad",
+      "keys": [
+        "9"
+      ]
+    },
+    "cam_right": {
+      "via": "pad",
+      "keys": [
+        "0"
+      ]
+    },
+    "order_attack": {
+      "via": "pad",
+      "keys": [
+        "UP"
+      ]
+    },
+    "order_cover": {
+      "via": "pad",
+      "keys": [
+        "DOWN"
+      ]
+    },
+    "order_disperse": {
+      "via": "pad",
+      "keys": [
+        "LEFT"
+      ]
+    },
+    "order_sp": {
+      "via": "pad",
+      "keys": [
+        "RIGHT"
+      ]
+    },
+    "map": {
+      "via": "pad",
+      "keys": [
+        "M"
+      ]
+    },
+    "pause": {
+      "via": "pad",
+      "keys": [
+        "ESC"
+      ]
+    },
+    "boresight": {
+      "via": "pad",
+      "keys": []
+    },
+    "menu_up": {
+      "via": "pad",
+      "keys": [
+        "UP"
+      ]
+    },
+    "menu_down": {
+      "via": "pad",
+      "keys": [
+        "DOWN"
+      ]
+    },
+    "menu_left": {
+      "via": "pad",
+      "keys": [
+        "LEFT"
+      ]
+    },
+    "menu_right": {
+      "via": "pad",
+      "keys": [
+        "RIGHT"
+      ]
+    },
+    "menu_ok": {
+      "via": "pad",
+      "keys": [
+        "ENTER"
+      ]
+    },
+    "menu_back": {
+      "via": "pad",
+      "keys": [
+        "ESC"
+      ]
+    },
+    "center_view": {
+      "via": "pad",
+      "keys": []
+    },
+    "toggle_head": {
+      "via": "pad",
+      "keys": []
+    }
+  },
+  "camera": {
+    "mode": "stick",
+    "speed": 1.5,
+    "stick_speed": 3.0,
+    "max": 1.0
+  },
+  "head": {
+    "enabled": false,
+    "port": 4242,
+    "opentrack_path": "C:\\Program Files (x86)\\opentrack\\opentrack.exe",
+    "manage_process": true,
+    "invert_yaw": false,
+    "invert_pitch": false,
+    "yaw_full": 75.0,
+    "pitch_full": 15.0,
+    "deadzone": 0,
+    "yaw_exp": 1.0,
+    "pitch_exp": 1.0,
+    "smoothing_ms": 80.0,
+    "max_stick": 1.0
+  },
+  "launcher": {
+    "steam_appid": "2288340",
+    "autostart_bridge": true,
+    "minimize_on_play": true,
+    "low_priority": false
+  },
+  "ministick": {
+    "enabled": false,
+    "sens": 0.5,
+    "timeout_ms": 80,
+    "deadzone": 0.08,
+    "invert_x": false,
+    "invert_y": false,
+    "bindings": {
+      "up": [],
+      "down": [],
+      "left": [],
+      "right": []
+    },
+    "bind_threshold": 0.5
+  }
+}

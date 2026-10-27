@@ -1,0 +1,49 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Версия тега = APP_VERSION
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path x52_ac8_launcher.py -Pattern '^APP_VERSION = "([^"]+)"').Matches[0].Groups[1].Value
+          if ("v$v" -ne "${{ github.ref_name }}") { throw "Тег ${{ github.ref_name }} не совпадает с APP_VERSION $v" }
+          "VERSION=$v" >> $env:GITHUB_ENV
+
+      - name: Сборка программы
+        shell: pwsh
+        run: |
+          pip install pyinstaller==6.16.0 pygame==2.6.1 vgamepad==0.1.0
+          python -m PyInstaller --noconfirm --clean --windowed --onedir --noupx `
+            --name "X52 Launcher" --icon "$PWD\x52_launcher.ico" --add-data "$PWD\x52_launcher.ico;." `
+            --collect-all vgamepad --exclude-module pytest `
+            --distpath dist --workpath build/work --specpath build/work `
+            x52_ac8_launcher.py
+
+      - name: Установщик
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build/redist | Out-Null
+          Invoke-WebRequest -Uri "https://github.com/nefarius/ViGEmBus/releases/download/v1.22.0/ViGEmBus_1.22.0_x64_x86_arm64.exe" -OutFile build/redist/ViGEmBus_setup.exe
+          choco install innosetup -y --no-progress
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q "/DAppVersion=$env:VERSION" build\installer.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Релиз
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" "dist/X52_Launcher_Setup_$env:VERSION.exe" --title "X52 Launcher $env:VERSION" --generate-notes
