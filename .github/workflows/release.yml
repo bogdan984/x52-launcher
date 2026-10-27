@@ -3,6 +3,7 @@ name: release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:  # пробная сборка без публикации
 
 permissions:
   contents: write
@@ -21,14 +22,15 @@ jobs:
         shell: pwsh
         run: |
           $v = (Select-String -Path x52_ac8_launcher.py -Pattern '^APP_VERSION = "([^"]+)"').Matches[0].Groups[1].Value
-          if ("v$v" -ne "${{ github.ref_name }}") { throw "Тег ${{ github.ref_name }} не совпадает с APP_VERSION $v" }
+          if ("${{ github.event_name }}" -eq "push" -and "v$v" -ne "${{ github.ref_name }}") { throw "Тег ${{ github.ref_name }} не совпадает с APP_VERSION $v" }
           "VERSION=$v" >> $env:GITHUB_ENV
 
       - name: Сборка программы
         shell: pwsh
         run: |
-          # setup.py vgamepad 0.1.0 без драйвера запускает интерактивный msiexec и сборка виснет — убираем вызов
-          pip download --no-deps --no-binary :all: vgamepad==0.1.0 -d build/vg
+          # setup.py vgamepad 0.1.0 без драйвера запускает интерактивный msiexec (даже pip download) — сборка виснет; убираем вызов
+          New-Item -ItemType Directory -Force build/vg | Out-Null
+          Invoke-WebRequest -Uri "https://files.pythonhosted.org/packages/source/v/vgamepad/vgamepad-0.1.0.tar.gz" -OutFile build/vg/vgamepad-0.1.0.tar.gz
           tar -xzf build/vg/vgamepad-0.1.0.tar.gz -C build/vg
           (Get-Content build/vg/vgamepad-0.1.0/setup.py) -replace "subprocess\.call\(\['msiexec'", "(lambda *a, **k: None)(['msiexec'" | Set-Content build/vg/vgamepad-0.1.0/setup.py
           pip install pyinstaller==6.16.0 pygame==2.6.1 ./build/vg/vgamepad-0.1.0
@@ -48,6 +50,7 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - name: Релиз
+        if: github.event_name == 'push'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
