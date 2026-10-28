@@ -267,7 +267,7 @@ def test_531_ministick_cam_mode_same_as_view_tab(app):
         app.worker.send = orig
 
 
-def test_540_ministick_shared_across_profiles(app):
+def test_540_ministick_per_profile(app):
     app.create_profile("Взлёт", "dcs")
     app.rs.ministick_var.set(True)
     app.on_ministick_toggle()
@@ -277,7 +277,15 @@ def test_540_ministick_shared_across_profiles(app):
     assert app.cfg["game"]["virtual_pad"]               # мини-стик сам включил геймпад
     assert "Взлёт" in app.glob["ministick"]["profiles"]
     app.create_profile("Полёт", "dcs")
-    assert app.cfg["ministick"]["sens"] == 1.0 and app.cfg["camera"]["mode"] == "mouse"   # общие настройки
+    assert app.cfg["ministick"]["sens"] == 0.5 and app.cfg["camera"]["mode"] == "stick"   # новый — по умолчанию
+    assert app.rs.ministick_sens.get() == 0.5 and app.rs.ms_mode_var.get() == "stick"
+    app.on_ministick_sens(1.4)                          # «Полёт» быстрее, «Взлёт» не меняется
+    app.switch_profile("Взлёт")
+    assert app.cfg["ministick"]["sens"] == 1.0 and app.cfg["camera"]["mode"] == "mouse"
+    assert app.rs.ministick_sens.get() == 1.0 and app.rs.ms_mode_var.get() == "mouse"
+    assert app.worker.cfg["ministick"]["sens"] == 1.0
+    app.switch_profile("Полёт")
+    assert app.cfg["ministick"]["sens"] == 1.4 and app.rs.ministick_sens.get() == 1.4
     assert not app.cfg["ministick"]["enabled"] and not app.rs.ministick_var.get()
     assert set(app.rs.ms_prof_vars) >= {"Взлёт", "Полёт"} and app.rs.ms_prof_vars["Взлёт"].get()
     app.rs.ms_prof_vars["Полёт"].set(True)             # отметили «Полёт» галочкой
@@ -337,7 +345,9 @@ def test_555_ministick_curve_slider(app):
     app.rs.apply_ministick_cfg(app.cfg["ministick"])
     assert abs(app.rs.ministick_curve.get() - 1.8) < 1e-6
     app.save_cfg()
-    assert app.glob["ministick"] is None or app.glob["ministick"]["settings"]["curve"] == 1.8
+    assert "settings" not in app.glob["ministick"]
+    with open(app.L.profile_path(app.cfg["profile_name"]), encoding="utf-8") as f:
+        assert json.load(f)["ministick"]["curve"] == 1.8
     app.on_ministick_val("curve", 1.0)
     app.rs.ministick_lock.set(True)
     app.on_ministick_val("axis_lock", True)
@@ -346,7 +356,95 @@ def test_555_ministick_curve_slider(app):
     app.on_ministick_val("axis_lock", False)
     app.save_cfg()
 
-def test_556_zoom_shared_across_profiles(app):
+def test_5527_old_shared_settings_moved_into_profiles(app):
+    """Обновление с 5.5.26: общие настройки мини-стика/обзора/зума раздаются всем профилям один раз."""
+    app.create_profile("М-1", "dcs")
+    app.create_profile("М-2", "dcs")
+    app.glob["ministick"] = app.L.sanitize_shared_ministick({
+        "settings": {"sens": 1.7, "curve": 2.0}, "camera": {"mode": "mouse", "speed": 3.0}, "profiles": ["М-1"]})
+    app.glob["zoom"] = app.L.sanitize_shared_zoom({"settings": {"axis": 5, "filter_thr": 0.05},
+                                                   "profiles": ["М-2"]})
+    app._ms_shared_init()                               # как при запуске: перенос, затем галочки
+    app._ms_shared_apply(app.cfg)
+    app._zoom_shared_init()
+    app._zoom_shared_apply(app.cfg)
+    assert app.glob["ministick"] == {"profiles": ["М-1"]} and app.glob["zoom"] == {"profiles": ["М-2"]}
+    with open(app.L.global_path(), encoding="utf-8") as f:
+        assert "settings" not in json.load(f)["ministick"]
+    for n in ("М-1", "М-2"):
+        with open(app.L.profile_path(n), encoding="utf-8") as f:
+            c = json.load(f)
+        assert c["ministick"]["sens"] == 1.7 and c["ministick"]["curve"] == 2.0
+        assert c["camera"]["mode"] == "mouse" and c["camera"]["speed"] == 3.0 and c["zoom"]["axis"] == 5
+    app.switch_profile("М-1")
+    assert app.cfg["ministick"]["enabled"] and not app.cfg["zoom"]["enabled"]
+    app.on_ministick_sens(0.9)                          # дальше профили независимы
+    app.switch_profile("М-2")
+    assert app.cfg["ministick"]["sens"] == 1.7 and app.cfg["zoom"]["enabled"]
+    app.rs.zoom_var.set(False)
+    app.on_zoom_toggle()
+    app.switch_profile("М-1")
+    app.rs.ministick_var.set(False)
+    app.on_ministick_toggle()
+    app.switch_profile("ACE COMBAT 8")
+    for n in ("М-1", "М-2"):
+        os.remove(app.L.profile_path(n))
+    app.refresh_profiles()
+    assert app.glob["ministick"]["profiles"] == [] and app.glob["zoom"]["profiles"] == []
+
+
+def test_5527_every_setting_follows_profile(app):
+    """Всё, что настраивается во вкладках, у каждого профиля своё и подтягивается при переключении."""
+    app.create_profile("П-А", "dcs")
+    c = app.cfg
+    c["axes"]["roll"] = 5
+    c["invert"]["pitch"] = True
+    c["response"]["yaw"]["mode"] = "rudder" if c["response"]["yaw"]["mode"] != "rudder" else "twist"
+    c["long_press_ms"] = 900
+    c["layers"]["enabled"] = True
+    c["head"]["yaw_full"] = 33.0
+    c["custom_actions"].append({"name": "Тест-А", "kind": "key", "mods": [], "key": "K"})
+    c["sequences"].append({"name": "Запуск-А", "steps": []})
+    c["auto"]["aircraft"] = ["F-16C_50"]
+    c["bindings"]["pitch_up"] = [{"type": "button", "index": 4}, None]
+    c["outputs"]["pitch_up"] = {"via": "key", "keys": ["Q"]}
+    app._replace_cfg(app.L.sanitize_config(json.loads(json.dumps(c))))
+    app.on_ministick_val("curve", 2.2)
+    app.on_ministick_sens(1.3)
+    app.rs.ministick_inv_x.set(True)
+    app.on_ministick_val("invert_x", True)
+    app.cfg["camera"]["stick_speed"] = 7.0
+    app.on_zoom_val("filter_thr", 0.07)
+    app.save_cfg()
+    a = json.loads(json.dumps(app.cfg))
+
+    app.create_profile("П-Б", "dcs")                     # новый профиль — всё по умолчанию
+    d = app.L.new_profile_config("П-Б", "dcs", a)
+    for key in ("invert", "response", "long_press_ms", "layers", "head", "ministick", "camera", "zoom",
+                "custom_actions", "sequences", "bindings", "outputs"):
+        assert app.cfg[key] == d[key], key
+    assert app.cfg["auto"]["aircraft"] == []
+    assert app.rs.ministick_sens.get() == 0.5 and not app.rs.ministick_inv_x.get()
+    assert app.cam_stick_speed.get() == 3.0 and app.long_scale.get() == d["long_press_ms"]
+    app.on_ministick_sens(0.7)
+    app.switch_profile("П-А")
+    for key in ("axes", "invert", "response", "long_press_ms", "layers", "head", "ministick", "camera", "zoom",
+                "custom_actions", "sequences", "auto", "bindings", "outputs"):
+        assert app.cfg[key] == a[key], key
+    assert app.rs.ministick_sens.get() == 1.3 and app.rs.ministick_inv_x.get()
+    assert abs(app.rs.ministick_curve.get() - 2.2) < 1e-6 and app.cam_stick_speed.get() == 7.0
+    assert app.axis_combo["roll"].get() == "6" and app.inv_var["pitch"].get()
+    assert app.long_scale.get() == 900 and app.air_var.get() == "F-16C_50"
+    app.create_profile("П-В", "copy")                    # копия — как у текущего
+    assert app.cfg["ministick"]["sens"] == 1.3 and app.cfg["camera"]["stick_speed"] == 7.0
+    assert app.cfg["bindings"]["pitch_up"][0] == {"type": "button", "index": 4}
+    app.switch_profile("ACE COMBAT 8")
+    for n in ("П-А", "П-Б", "П-В"):
+        os.remove(app.L.profile_path(n))
+    app.refresh_profiles()
+
+
+def test_556_zoom_per_profile(app):
     app.create_profile("З-Взлёт", "dcs")
     app.rs.zoom_var.set(True)
     app.on_zoom_toggle()
@@ -355,7 +453,7 @@ def test_556_zoom_shared_across_profiles(app):
     app.save_cfg()
     assert app.glob["zoom"]["profiles"] == ["З-Взлёт"]
     app.create_profile("З-Полёт", "dcs")
-    assert app.cfg["zoom"]["axis"] == 6 and app.cfg["zoom"]["filter_thr"] == 0.04     # общие настройки
+    assert app.cfg["zoom"]["axis"] is None and app.cfg["zoom"]["filter_thr"] == 0.02  # новый — по умолчанию
     assert not app.cfg["zoom"]["enabled"] and not app.rs.zoom_var.get()
     assert app.rs.zoom_prof_vars["З-Взлёт"].get() and not app.rs.zoom_prof_vars["З-Полёт"].get()
     app.rs.zoom_prof_vars["З-Полёт"].set(True)                    # галочка у текущего = включить
@@ -363,7 +461,10 @@ def test_556_zoom_shared_across_profiles(app):
     assert app.cfg["zoom"]["enabled"] and app.cfg["game"]["virtual_pad"]
     app.on_zoom_val("filter_thr", 0.03)
     app.switch_profile("З-Взлёт")
-    assert app.cfg["zoom"]["enabled"] and app.cfg["zoom"]["filter_thr"] == 0.03
+    assert app.cfg["zoom"]["enabled"] and app.cfg["zoom"]["filter_thr"] == 0.04 and app.cfg["zoom"]["axis"] == 6
+    app.switch_profile("З-Полёт")
+    assert app.cfg["zoom"]["filter_thr"] == 0.03
+    app.switch_profile("З-Взлёт")
     app.rs.zoom_prof_vars["З-Полёт"].set(False)                   # галочка у другого профиля
     app.on_zoom_profile("З-Полёт")
     app.switch_profile("З-Полёт")
@@ -2138,6 +2239,4 @@ def test_500_selftest_mode_writes_result(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "vgamepad", types.SimpleNamespace(
         VX360Gamepad=lambda: (_ for _ in ()).throw(OSError("нет ViGEmBus")), XUSB_BUTTON=_B))
     assert L.run_selftest(str(res)) == 1 and "нет ViGEmBus" in res.read_text(encoding="utf-8")
-
-
 

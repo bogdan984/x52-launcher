@@ -83,7 +83,7 @@ from x52_core import (  # noqa: E402
 import x52_ministick  # noqa: E402
 
 APP_NAME = "X52 Launcher"
-APP_VERSION = "5.5.26"
+APP_VERSION = "5.5.27"
 # Собранный exe (PyInstaller): программа в Program Files (только чтение), настройки — в %APPDATA%.
 FROZEN = bool(getattr(sys, "frozen", False))
 APP_DIR = os.path.dirname(sys.executable if FROZEN else os.path.abspath(__file__))
@@ -275,8 +275,8 @@ def global_path():
 
 
 def sanitize_shared_ministick(ms):
-    """Общие для всех профилей настройки вкладки «Мини-стик»: settings (cfg["ministick"] без enabled),
-    camera (cfg["camera"]) и profiles — в каких профилях мини-стик включён. None — ещё не создано."""
+    """profiles — в каких профилях включён мини-стик. Сами настройки мини-стика и обзора с 5.5.27 хранятся
+    в каждом профиле; settings/camera (общие, до 5.5.27) остаются только до переноса в профили. None — ещё нет."""
     if not isinstance(ms, dict):
         return None
     st = ms.get("settings") if isinstance(ms.get("settings"), dict) else {}
@@ -287,6 +287,8 @@ def sanitize_shared_ministick(ms):
     for p in prof[:200]:
         if isinstance(p, str) and p.strip() and clean_profile_name(p) not in names:
             names.append(clean_profile_name(p))
+    if "settings" not in ms:
+        return {"profiles": names}
     return {"settings": {k: v for k, v in tmp["ministick"].items() if k != "enabled"},
             "camera": tmp["camera"], "profiles": names}
 
@@ -348,7 +350,8 @@ def import_all_settings(path):
 
 
 def sanitize_shared_zoom(z):
-    """Общие настройки подвкладки «Зум»: settings (cfg["zoom"] без enabled) и profiles — где зум включён."""
+    """profiles — где включён зум. Настройки зума с 5.5.27 — в каждом профиле; settings (общие, до 5.5.27)
+    остаются только до переноса в профили."""
     if not isinstance(z, dict):
         return None
     st = z.get("settings") if isinstance(z.get("settings"), dict) else {}
@@ -358,6 +361,8 @@ def sanitize_shared_zoom(z):
     for p in prof[:200]:
         if isinstance(p, str) and p.strip() and clean_profile_name(p) not in names:
             names.append(clean_profile_name(p))
+    if "settings" not in z:
+        return {"profiles": names}
     return {"settings": {k: v for k, v in tmp["zoom"].items() if k != "enabled"}, "profiles": names}
 
 
@@ -2235,36 +2240,46 @@ class App(tk.Tk):
         self.sync_widgets_from_cfg()
         self.mark_dirty()
 
-    # ---- общие настройки мини-стика (одни на все профили) + список профилей, где он включён
+    # ---- мини-стик и зум: настройки в каждом профиле, общий только список профилей, где они включены
     def _ms_shared_init(self):
-        if self.glob.get("ministick") is not None:
-            return
-        src, profs = None, []
+        sh = self.glob.get("ministick")
+        if sh is None:
+            profs = [n for n in list_profiles() if self._profile_flag(n, "ministick")]
+            if self.cfg["ministick"]["enabled"] and self.cfg["profile_name"] not in profs:
+                profs.append(self.cfg["profile_name"])
+            self.glob["ministick"] = {"profiles": profs}
+            self.save_global()
+        elif "settings" in sh:              # до 5.5.27 настройки были общими: раздать их всем профилям
+            self._migrate_shared(lambda c: (c["ministick"].update(json.loads(json.dumps(sh["settings"]))),
+                                            c["camera"].update(sh["camera"])))
+            self.glob["ministick"] = {"profiles": sh["profiles"]}
+            self.save_global()
+
+    def _profile_flag(self, name, key):
+        try:
+            with open(profile_path(name), encoding="utf-8") as f:
+                return sanitize_config(json.load(f))[key]["enabled"]
+        except Exception:  # noqa
+            return False
+
+    def _migrate_shared(self, fill):
+        """Записать бывшие общие настройки в каждый профиль (и в текущий), чтобы после обновления ничего
+        не поменялось."""
         for n in list_profiles():
             try:
                 with open(profile_path(n), encoding="utf-8") as f:
                     c = sanitize_config(json.load(f))
-            except Exception:  # noqa
-                continue
-            if c["ministick"]["enabled"]:
-                profs.append(n)
-                src = src or c
-        if self.cfg["ministick"]["enabled"] and self.cfg["profile_name"] not in profs:
-            profs.append(self.cfg["profile_name"])
-            src = src or self.cfg
-        src = src or self.cfg
-        self.glob["ministick"] = {"settings": {k: json.loads(json.dumps(v)) for k, v in src["ministick"].items()
-                                               if k != "enabled"},
-                                  "camera": dict(src["camera"]), "profiles": profs}
-        self.save_global()
+                fill(c)
+                write_json_atomic(profile_path(n), c)
+            except Exception as e:  # noqa
+                log_error(f"Перенос общих настроек в профиль «{n}»: {e}")
+        fill(self.cfg)
 
     def _ms_shared_apply(self, cfg):
         sh = self.glob.get("ministick")
         if not sh:
             return
-        cfg["ministick"].update(json.loads(json.dumps(sh["settings"])))
         cfg["ministick"]["enabled"] = cfg["profile_name"] in sh["profiles"]
-        cfg["camera"].update(sh["camera"])
         if cfg["ministick"]["enabled"]:
             cfg["game"]["virtual_pad"] = True       # мини-стик идёт в игру через правый стик геймпада
 
@@ -2278,42 +2293,27 @@ class App(tk.Tk):
             profs.append(name)
         elif not self.cfg["ministick"]["enabled"] and name in profs:
             profs.remove(name)
-        new = {"settings": {k: json.loads(json.dumps(v)) for k, v in self.cfg["ministick"].items()
-                            if k != "enabled"},
-               "camera": dict(self.cfg["camera"]), "profiles": profs}
-        if new != sh:
-            self.glob["ministick"] = new
+        if profs != sh["profiles"]:
+            sh["profiles"] = profs
             self.save_global()
 
     def _zoom_shared_init(self):
-        """Первый запуск 5.5.7: общие настройки зума берутся из текущего профиля (если зум в нём включён),
-        иначе из первого профиля с включённым зумом; галочки — профили, где зум был включён."""
-        if self.glob.get("zoom") is not None:
-            return
-        src, profs = None, []
-        for n in list_profiles():
-            try:
-                with open(profile_path(n), encoding="utf-8") as f:
-                    c = sanitize_config(json.load(f))
-            except Exception:  # noqa
-                continue
-            if c["zoom"]["enabled"]:
-                profs.append(n)
-                src = src or c
-        if self.cfg["zoom"]["enabled"]:
-            if self.cfg["profile_name"] not in profs:
+        sh = self.glob.get("zoom")
+        if sh is None:
+            profs = [n for n in list_profiles() if self._profile_flag(n, "zoom")]
+            if self.cfg["zoom"]["enabled"] and self.cfg["profile_name"] not in profs:
                 profs.append(self.cfg["profile_name"])
-            src = self.cfg
-        src = src or self.cfg
-        self.glob["zoom"] = {"settings": {k: v for k, v in src["zoom"].items() if k != "enabled"},
-                             "profiles": profs}
-        self.save_global()
+            self.glob["zoom"] = {"profiles": profs}
+            self.save_global()
+        elif "settings" in sh:              # до 5.5.27 настройки зума были общими
+            self._migrate_shared(lambda c: c["zoom"].update(sh["settings"]))
+            self.glob["zoom"] = {"profiles": sh["profiles"]}
+            self.save_global()
 
     def _zoom_shared_apply(self, cfg):
         sh = self.glob.get("zoom")
         if not sh:
             return
-        cfg["zoom"].update(sh["settings"])
         cfg["zoom"]["enabled"] = cfg["profile_name"] in sh["profiles"]
         if cfg["zoom"]["enabled"]:
             cfg["game"]["virtual_pad"] = True       # зум идёт в игру через левый стик геймпада
@@ -2328,9 +2328,8 @@ class App(tk.Tk):
             profs.append(name)
         elif not self.cfg["zoom"]["enabled"] and name in profs:
             profs.remove(name)
-        new = {"settings": {k: v for k, v in self.cfg["zoom"].items() if k != "enabled"}, "profiles": profs}
-        if new != sh:
-            self.glob["zoom"] = new
+        if profs != sh["profiles"]:
+            sh["profiles"] = profs
             self.save_global()
 
     def save_cfg(self, path=None):
@@ -4346,6 +4345,11 @@ class App(tk.Tk):
             cfg = sanitize_config(json.loads(json.dumps(self.cfg)))
             cfg["profile_name"] = clean_profile_name(name)
             cfg["auto"] = {"processes": list(self.cfg["auto"]["processes"]), "aircraft": []}
+            for key in ("ministick", "zoom"):       # копия: мини-стик / зум включены, как в исходном
+                sh = self.glob.get(key)
+                if sh is not None and cfg[key]["enabled"] and cfg["profile_name"] not in sh["profiles"]:
+                    sh["profiles"].append(cfg["profile_name"])
+                    self.save_global()
         else:
             cfg = new_profile_config(name, tmpl, self.cfg)
         write_json_atomic(profile_path(cfg["profile_name"]), cfg)

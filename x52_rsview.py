@@ -1005,7 +1005,7 @@ class RsView(ttk.Frame):
         pf = ttk.LabelFrame(right, text="Мини-стик работает в профилях")
         pf.pack(fill="x", pady=(4, 4))
         ttk.Label(pf, foreground="#555", wraplength=280, justify="left", text=(
-            "Все настройки этой вкладки общие для всех профилей. Отметьте профили, где мини-стик "
+            "Настройки этой вкладки — свои в каждом профиле. Отметьте профили, где мини-стик "
             "нужен — в них сам включится и виртуальный геймпад.")).pack(anchor="w", padx=6, pady=(2, 2))
         self.ms_prof_frame = ttk.Frame(pf)
         self.ms_prof_frame.pack(fill="x", padx=6, pady=(0, 4))
@@ -1206,7 +1206,7 @@ class RsView(ttk.Frame):
         pf = ttk.LabelFrame(right, text="Зум работает в профилях")
         pf.pack(fill="x", pady=(4, 6))
         ttk.Label(pf, foreground="#555", wraplength=300, justify="left", text=(
-            "Настройки этой вкладки общие для всех профилей. В отмеченных профилях сам включится "
+            "Настройки этой вкладки — свои в каждом профиле. В отмеченных профилях сам включится "
             "виртуальный геймпад.")).pack(anchor="w", padx=6, pady=(2, 2))
         self.zoom_prof_frame = ttk.Frame(pf)
         self.zoom_prof_frame.pack(fill="x", padx=6, pady=(0, 4))
