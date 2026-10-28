@@ -115,6 +115,7 @@ def app(tmp_path_factory):
     import x52_ac8_launcher as L
     L.CONFIG_PATH = str(tmp / "x52_config.json")
     L.ERROR_LOG = str(tmp / "x52_error.log")
+    L.SEQ_LOG = str(tmp / "x52_seq.log")
     # старый конфиг пользователя (версия 2.0) — проверяем перенос
     with open(os.path.join(ROOT, "x52_config.json"), encoding="utf-8-sig") as f:
         old = json.load(f)

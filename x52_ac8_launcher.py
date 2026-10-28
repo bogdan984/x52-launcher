@@ -74,7 +74,7 @@ from x52_core import (  # noqa: E402
     ACTIONS, ACTION_LABEL, ACTION_PAD, ACTION_KEYS, ALL_KEYS, AXIS_ROLES,
     CAL_ROWS, CATEGORIES, EMPTY_OUT, HEAD_SCALES, INTERNAL_ACTIONS, IS_WIN,
     CUSTOM_PREFIX, SEQ_MAX_DELAY_MS, action_label, action_pair, all_action_ids,
-    clean_profile_name, find_custom, new_custom_id, new_profile_config,
+    action_steps, clean_profile_name, find_custom, new_custom_id, new_profile_config,
     KeySender, Mapper, OutputLimiter, STICK_PARAMS, STICK_PRESETS, TOKEN_TEXT, YAW_PARAMS, binding_text,
     clamp, compose_camera, default_config, find_opentrack, head_to_stick, key_from_tk_event, key_text,
     keys_text, learn_axis_binding, make_splitter, output_text, sanitize_config, shape_axis,
@@ -83,7 +83,7 @@ from x52_core import (  # noqa: E402
 import x52_ministick  # noqa: E402
 
 APP_NAME = "X52 Launcher"
-APP_VERSION = "5.5.24"
+APP_VERSION = "5.5.26"
 # Собранный exe (PyInstaller): программа в Program Files (только чтение), настройки — в %APPDATA%.
 FROZEN = bool(getattr(sys, "frozen", False))
 APP_DIR = os.path.dirname(sys.executable if FROZEN else os.path.abspath(__file__))
@@ -92,6 +92,7 @@ DATA_DIR = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), AP
 os.makedirs(DATA_DIR, exist_ok=True)
 CONFIG_PATH = os.path.join(DATA_DIR, "x52_config.json")
 ERROR_LOG = os.path.join(DATA_DIR, "x52_error.log")
+SEQ_LOG = os.path.join(DATA_DIR, "x52_seq.log")   # диагностика последовательностей
 ICON_PATH = os.path.join(RES_DIR, "x52_launcher.ico")
 SELF_EXE = os.path.basename(sys.executable).lower() if FROZEN else "pythonw.exe"   # сам лаунчер — не игра
 
@@ -410,9 +411,9 @@ def set_low_priority(low):
         return False
 
 
-def log_error(text):
+def log_error(text, path=None):
     try:
-        with open(ERROR_LOG, "a", encoding="utf-8") as f:
+        with open(path or ERROR_LOG, "a", encoding="utf-8") as f:
             f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + text + "\n")
     except OSError:
         pass
@@ -440,6 +441,7 @@ class Worker(threading.Thread):
         self._last_frame = None
         self._prev_internal = set()
         self.mapper = Mapper()
+        self._seq_log = {}               # aid -> [имя, сколько шагов уже записано в лог] (диагностика)
         self.ministick = None            # x52_ministick reader, запускается в _run
         self.profile_q = queue.Queue()  # «смена профиля» кнопкой X52 -> окно лаунчера
         self.open_count = 0             # сколько раз открывали джойстик
@@ -567,7 +569,7 @@ class Worker(threading.Thread):
             elif cmd == "stop":
                 self._stop_bridge()
             elif cmd == "restart":        # смена профиля: геймпад мог включиться/выключиться
-                self.mapper.reset()
+                self._reset_mapper("смена профиля")
                 want_pad = bool(self.cfg["game"]["virtual_pad"])
                 if self.bridge_on and want_pad and self.pad is None:
                     self._create_pad()
@@ -668,7 +670,43 @@ class Worker(threading.Thread):
         self.state = {"axes": [], "buttons": [], "hats": [], "name": None}
         self.out = dict(EMPTY_OUT)
         self._prev_internal = set()
+        self._reset_mapper("джойстик потерян или не найден")
+
+    def _reset_mapper(self, why):
+        for name, n, _ in self._seq_log.values():
+            log_error(f"Последовательность «{name}»: ПРЕРВАНА после шага {n} — {why}", SEQ_LOG)
+        self._seq_log = {}
         self.mapper.reset()
+
+    def _log_seq(self, sent):
+        """Диагностика в x52_error.log: старт последовательности, каждый шаг (и куда ушли клавиши), конец."""
+        m = self.mapper
+        for aid in [a for a in self._seq_log if a not in m.seq_start]:
+            log_error(f"Последовательность «{self._seq_log.pop(aid)[0]}»: завершена", SEQ_LOG)
+        for aid, t0 in m.seq_start.items():
+            ca = find_custom(self.cfg, aid)
+            if ca is None:
+                continue
+            steps = action_steps(self.cfg, ca)
+            if aid not in self._seq_log:
+                self._seq_log[aid] = [ca.get("seq") or aid, 0, set()]
+                log_error(f"Последовательность «{self._seq_log[aid][0]}»: старт, шагов {len(steps)}, "
+                          f"мост {'вкл' if self.bridge_on else 'ВЫКЛ'}", SEQ_LOG)
+            rec = self._seq_log[aid]
+            el = (time.perf_counter() - t0) * 1000.0
+            while rec[1] < len(steps) and steps[rec[1]]["delay_ms"] <= el:
+                st = steps[rec[1]]
+                rec[1] += 1
+                rec[2] = set()
+                log_error(f"  шаг {rec[1]}: {keys_text(st['keys'])} ({st['delay_ms']} мс, держать "
+                          f"{st['duration_ms']} мс) → окно {x52_dcs.foreground_process() or '?'}", SEQ_LOG)
+            # клавиши других действий, нажатые одновременно с шагом: игра видит их одной комбинацией
+            cur = [st for st in steps if st["delay_ms"] <= el < st["delay_ms"] + st["duration_ms"]]
+            if cur:
+                extra = set(sent) - set().union(*(st["keys"] for st in cur)) - rec[2]
+                if extra:
+                    rec[2] |= extra
+                    log_error(f"    вместе с шагом {rec[1]} нажаты ещё: {keys_text(sorted(extra))}", SEQ_LOG)
 
     def _lose_device(self):
         self.joy = None
@@ -697,10 +735,11 @@ class Worker(threading.Thread):
         self.state = {"axes": axes, "buttons": buttons, "hats": hats, "name": name}
         if self.cfg is not self._cfg_seen:      # новый профиль: состояние маппера с нуля
             self._cfg_seen = self.cfg
-            self.mapper.reset()
+            self._reset_mapper("смена профиля на «%s»" % self.cfg.get("profile_name"))
         if self.ministick is not None and self.ministick.ok:
             self.mapper.ministick = self.ministick.read()
         out = self.mapper.step(self.cfg, axes, buttons, hats)
+        self._log_seq(out["keys"])
         if self.mapper.profile_events:
             evs, self.mapper.profile_events = self.mapper.profile_events, []
             for ev in evs:                     # и при выключенном мосте (блок — только во время назначения)
