@@ -280,6 +280,12 @@ def test_540_ministick_per_profile(app):
     assert app.cfg["ministick"]["sens"] == 0.5 and app.cfg["camera"]["mode"] == "stick"   # новый — по умолчанию
     assert app.rs.ministick_sens.get() == 0.5 and app.rs.ms_mode_var.get() == "stick"
     app.on_ministick_sens(1.4)                          # «Полёт» быстрее, «Взлёт» не меняется
+    wheel_old = list(app.glob["wheel"]["profiles"])
+    assert "Взлёт" not in app.rs.ms_prof_vars           # в списке — только профили колеса
+    for cb, n in zip(app.wheel_combo, ("Взлёт", "Полёт", app.NO_PROFILE)):
+        cb.set(n)
+    app.on_wheel()
+    assert list(app.rs.ms_prof_vars) == ["Взлёт", "Полёт"]
     app.switch_profile("Взлёт")
     assert app.cfg["ministick"]["sens"] == 1.0 and app.cfg["camera"]["mode"] == "mouse"
     assert app.rs.ministick_sens.get() == 1.0 and app.rs.ms_mode_var.get() == "mouse"
@@ -303,12 +309,15 @@ def test_540_ministick_per_profile(app):
     assert app.glob["ministick"]["profiles"] == ["Полёт"] and app.cfg["ministick"]["enabled"]
     app.profile_rename("Полёт 2")
     assert app.glob["ministick"]["profiles"] == ["Полёт 2"]
+    assert app.glob["wheel"]["profiles"][1] == "Полёт 2" and app.rs.ms_prof_vars["Полёт 2"].get()
     # уборка: остальные тесты ждут профиль ACE COMBAT 8 и мини-стик выключенным
     app.rs.ministick_var.set(False)
     app.on_ministick_toggle()
     app.switch_profile("ACE COMBAT 8")
     for n in ("Взлёт", "Полёт 2"):
         os.remove(app.L.profile_path(n))
+    app.glob["wheel"]["profiles"] = wheel_old
+    app.save_global()
     app.refresh_profiles()
     assert app.glob["ministick"]["profiles"] == []
 
@@ -455,6 +464,11 @@ def test_556_zoom_per_profile(app):
     app.create_profile("З-Полёт", "dcs")
     assert app.cfg["zoom"]["axis"] is None and app.cfg["zoom"]["filter_thr"] == 0.02  # новый — по умолчанию
     assert not app.cfg["zoom"]["enabled"] and not app.rs.zoom_var.get()
+    wheel_old = list(app.glob["wheel"]["profiles"])
+    for cb, n in zip(app.wheel_combo, (app.NO_PROFILE, "З-Взлёт", "З-Полёт")):
+        cb.set(n)
+    app.on_wheel()
+    assert list(app.rs.zoom_prof_vars) == ["З-Взлёт", "З-Полёт"]
     assert app.rs.zoom_prof_vars["З-Взлёт"].get() and not app.rs.zoom_prof_vars["З-Полёт"].get()
     app.rs.zoom_prof_vars["З-Полёт"].set(True)                    # галочка у текущего = включить
     app.on_zoom_profile("З-Полёт")
@@ -479,7 +493,58 @@ def test_556_zoom_per_profile(app):
     for n in list(app.L.list_profiles()):
         if n.startswith("З-"):
             os.remove(app.L.profile_path(n))
+    app.glob["wheel"]["profiles"] = wheel_old
+    app.save_global()
     app.refresh_profiles()
+
+
+def test_profile_select_toggle_and_share_blocks(app, monkeypatch):
+    import x52_rsview as rv
+    app.create_profile("Д-1", "dcs")
+    app.create_profile("Д-2", "dcs")                       # текущий — «Д-2»
+    axes_blk, resp_blk = app._share_blocks
+    app.share_refresh()
+    assert resp_blk["vars"]["Д-1"].get()                   # оба новых — настройки одинаковые
+    app.apply_stick_preset("fast")
+    app.cfg["poll_hz"] = 500
+    app.share_refresh()
+    assert not resp_blk["vars"]["Д-1"].get() and not axes_blk["vars"]["Д-1"].get()
+    assert "Д-2" not in resp_blk["vars"]                   # текущий — без галочки на выбор
+    resp_blk["vars"]["Д-1"].set(True)
+    app.share_apply(resp_blk)
+    d1 = app._load_config(app.L.profile_path("Д-1"), silent=True)
+    assert d1["response"] == app.cfg["response"] and d1["poll_hz"] != 500   # скопирован только отклик
+    app.share_refresh()
+    assert resp_blk["vars"]["Д-1"].get() and not axes_blk["vars"]["Д-1"].get()
+    # общая галочка «Выбор профилей»: выкл — блоки скрыты, окно кнопки без блока профилей
+    slaves = app.rs.ms_prof_box.master.pack_slaves()
+    pos = slaves.index(app.rs.ms_prof_box)
+    seen = []
+
+    class FakeDlg:
+        def __init__(self, *a, share=None, **k):
+            seen.append(share)
+            self.result, self.profiles = None, set()
+
+    monkeypatch.setattr(rv, "RsActionDialog", FakeDlg)
+    monkeypatch.setattr(app, "wait_window", lambda w: None)
+    app.prof_sel_var.set(False)
+    app.on_profile_select()
+    assert app.L.load_global()["profile_select"] is False
+    assert not axes_blk["frame"].winfo_manager() and not resp_blk["frame"].winfo_manager()
+    assert not app.rs.ms_prof_box.winfo_manager() and not app.rs.zoom_prof_box.winfo_manager()
+    app.rs.open_dialog(rv.btn_binding(0))
+    app.prof_sel_var.set(True)
+    app.on_profile_select()
+    app.rs.open_dialog(rv.btn_binding(0))
+    assert seen[0] is None and seen[1] is not None
+    assert axes_blk["frame"].winfo_manager() == "pack" and app.rs.zoom_prof_box.winfo_manager() == "pack"
+    assert app.rs.ms_prof_box.master.pack_slaves().index(app.rs.ms_prof_box) == pos   # на прежнем месте
+    app.switch_profile("ACE COMBAT 8")
+    for n in ("Д-1", "Д-2"):
+        os.remove(app.L.profile_path(n))
+    app.refresh_profiles()
+
 
 def test_551_button_assignment_to_several_profiles(app):
     import x52_rsview as rv

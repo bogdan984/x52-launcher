@@ -868,6 +868,42 @@ class SequenceManager(tk.Toplevel):
 # ----------------------------------------------------------------------
 # главный вид
 # ----------------------------------------------------------------------
+def show_packed(w, on):
+    """Скрыть (pack_forget) / вернуть виджет на прежнее место среди соседей."""
+    if on:
+        hidden = getattr(w, "_hidden_pack", None)
+        if hidden:
+            info, after = hidden
+            w._hidden_pack = None
+            if after is not None and after.winfo_exists() and after.winfo_manager() == "pack":
+                w.pack(**info, before=after)
+            else:
+                w.pack(**info)
+    elif w.winfo_manager() == "pack":
+        sl = w.master.pack_slaves()
+        i = sl.index(w)
+        info = w.pack_info()
+        info.pop("in", None)
+        w._hidden_pack = (info, sl[i + 1] if i + 1 < len(sl) else None)
+        w.pack_forget()
+
+
+def _profile_ticks(frame, names, on, command):
+    """Галочки профилей в frame; пустой names — подсказка, где их выбрать. Возвращает {имя: BooleanVar}."""
+    for ch in frame.winfo_children():
+        ch.destroy()
+    out = {}
+    for n in names:
+        v = tk.BooleanVar(value=n in on)
+        ttk.Checkbutton(frame, text=n, variable=v, command=lambda n=n: command(n)).pack(anchor="w")
+        out[n] = v
+    if not names:
+        ttk.Label(frame, foreground="#a44", wraplength=280, justify="left", text=(
+            "Профили колеса не выбраны: «Режимы и автопрофиль» → «Профиль по колесу режимов».")
+            ).pack(anchor="w")
+    return out
+
+
 class RsView(ttk.Frame):
     COLS = (("type", "Тип", 70), ("device", "Устройство", 170), ("name", "Название действия", 150),
             ("input", "Кнопка", 100), ("trig", "Срабатывание", 120), ("key", "Клавиша", 120),
@@ -1002,11 +1038,13 @@ class RsView(ttk.Frame):
         ttk.Checkbutton(right, text="Включить мини-стик в текущем профиле",
                         variable=self.ministick_var,
                         command=app.on_ministick_toggle).pack(anchor="w", pady=2)
-        pf = ttk.LabelFrame(right, text="Мини-стик работает в профилях")
+        pf = ttk.LabelFrame(right, text="Мини-стик работает в профилях колеса режимов")
         pf.pack(fill="x", pady=(4, 4))
+        self.ms_prof_box = pf
         ttk.Label(pf, foreground="#555", wraplength=280, justify="left", text=(
-            "Настройки этой вкладки — свои в каждом профиле. Отметьте профили, где мини-стик "
-            "нужен — в них сам включится и виртуальный геймпад.")).pack(anchor="w", padx=6, pady=(2, 2))
+            "Настройки этой вкладки — свои в каждом профиле. В списке — профили, выбранные для положений "
+            "колеса («Режимы и автопрофиль»). Отметьте, где мини-стик нужен — там сам включится и "
+            "виртуальный геймпад.")).pack(anchor="w", padx=6, pady=(2, 2))
         self.ms_prof_frame = ttk.Frame(pf)
         self.ms_prof_frame.pack(fill="x", padx=6, pady=(0, 4))
         self.ms_prof_vars = {}
@@ -1138,14 +1176,11 @@ class RsView(ttk.Frame):
                 lb.config(text="—", foreground="#999")
 
     def set_ministick_profiles(self, names, on):
-        for ch in self.ms_prof_frame.winfo_children():
-            ch.destroy()
-        self.ms_prof_vars = {}
-        for n in names:
-            v = tk.BooleanVar(value=n in on)
-            ttk.Checkbutton(self.ms_prof_frame, text=n, variable=v,
-                            command=lambda n=n: self.app.on_ms_profile(n)).pack(anchor="w")
-            self.ms_prof_vars[n] = v
+        self.ms_prof_vars = _profile_ticks(self.ms_prof_frame, names, on, self.app.on_ms_profile)
+
+    def show_profile_lists(self, on):
+        show_packed(self.ms_prof_box, on)
+        show_packed(self.zoom_prof_box, on)
 
     def update_ministick_status(self, reader):
         if reader is None:
@@ -1203,11 +1238,13 @@ class RsView(ttk.Frame):
         self.zoom_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(right, text="Включить зум в этом профиле", variable=self.zoom_var,
                         command=app.on_zoom_toggle).pack(anchor="w", pady=2)
-        pf = ttk.LabelFrame(right, text="Зум работает в профилях")
+        pf = ttk.LabelFrame(right, text="Зум работает в профилях колеса режимов")
         pf.pack(fill="x", pady=(4, 6))
+        self.zoom_prof_box = pf
         ttk.Label(pf, foreground="#555", wraplength=300, justify="left", text=(
-            "Настройки этой вкладки — свои в каждом профиле. В отмеченных профилях сам включится "
-            "виртуальный геймпад.")).pack(anchor="w", padx=6, pady=(2, 2))
+            "Настройки этой вкладки — свои в каждом профиле. В списке — профили, выбранные для положений "
+            "колеса («Режимы и автопрофиль»). В отмеченных сам включится виртуальный геймпад.")
+            ).pack(anchor="w", padx=6, pady=(2, 2))
         self.zoom_prof_frame = ttk.Frame(pf)
         self.zoom_prof_frame.pack(fill="x", padx=6, pady=(0, 4))
         self.zoom_prof_vars = {}
@@ -1248,14 +1285,7 @@ class RsView(ttk.Frame):
             "левый стик X занят зумом — Крен в игру не пойдёт." if z["enabled"] and roll_on else ""))
 
     def set_zoom_profiles(self, names, on):
-        for ch in self.zoom_prof_frame.winfo_children():
-            ch.destroy()
-        self.zoom_prof_vars = {}
-        for n in names:
-            v = tk.BooleanVar(value=n in on)
-            ttk.Checkbutton(self.zoom_prof_frame, text=n, variable=v,
-                            command=lambda n=n: self.app.on_zoom_profile(n)).pack(anchor="w")
-            self.zoom_prof_vars[n] = v
+        self.zoom_prof_vars = _profile_ticks(self.zoom_prof_frame, names, on, self.app.on_zoom_profile)
 
     def tick_zoom(self, axes, out):
         z = self.app.cfg["zoom"]
@@ -1499,12 +1529,13 @@ class RsView(ttk.Frame):
         if cols is None:
             title = input_name(app.cfg, b) + ("" if not app.cfg["layers"]["enabled"] else
                                               " (%s)" % self.layer.get())
+            share = ((app._all_profile_names(), app.cfg["profile_name"], same)
+                     if app.glob.get("profile_select", True) else None)
             dlg = RsActionDialog(app, title, start, [s["name"] for s in app.cfg["sequences"]],
-                                 app._all_profile_names(), self.pick_key,
-                                 share=(app._all_profile_names(), app.cfg["profile_name"], same),
+                                 app._all_profile_names(), self.pick_key, share=share,
                                  edit_seqs=self.edit_sequences)
             app.wait_window(dlg)
-            cols, profiles = dlg.result, dlg.profiles
+            cols, profiles = dlg.result, (dlg.profiles if share else None)   # без блока — другие не трогать
         if not cols:
             return
         apply_slots(app.cfg, b, layer, cols)

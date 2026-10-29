@@ -83,7 +83,7 @@ from x52_core import (  # noqa: E402
 import x52_ministick  # noqa: E402
 
 APP_NAME = "X52 Launcher"
-APP_VERSION = "5.5.27"
+APP_VERSION = "5.5.28"
 # Собранный exe (PyInstaller): программа в Program Files (только чтение), настройки — в %APPDATA%.
 FROZEN = bool(getattr(sys, "frozen", False))
 APP_DIR = os.path.dirname(sys.executable if FROZEN else os.path.abspath(__file__))
@@ -370,7 +370,7 @@ def load_global():
     """Настройки лаунчера, общие для всех профилей."""
     g = {"auto_switch": False, "dcs_port": x52_dcs.DCS_PORT, "overlay": dict(OVERLAY_DEFAULT),
          "wheel": {"enabled": False, "buttons": [23, 24, 25], "profiles": ["", "", ""], "last": None},
-         "autostart_bridge": None, "joycpl": False, "ministick": None, "zoom": None}
+         "autostart_bridge": None, "joycpl": False, "ministick": None, "zoom": None, "profile_select": True}
     try:
         with open(global_path(), encoding="utf-8") as f:
             d = json.load(f)
@@ -378,6 +378,7 @@ def load_global():
             g["ministick"] = sanitize_shared_ministick(d.get("ministick"))
             g["zoom"] = sanitize_shared_zoom(d.get("zoom"))
             g["auto_switch"] = bool(d.get("auto_switch", False))
+            g["profile_select"] = bool(d.get("profile_select", True))
             g["joycpl"] = bool(d.get("joycpl", False))
             p = d.get("dcs_port")
             if isinstance(p, int) and not isinstance(p, bool) and 1024 <= p <= 65535:
@@ -2172,6 +2173,7 @@ class App(tk.Tk):
         self.tab_assign = tabs[self.T_ASSIGN]
         self.head_en_var = tk.BooleanVar()   # одна галочка на двух вкладках
         self.KeyDialogClass = KeyDialog
+        self._share_blocks = []
         self._build_main(tabs[self.T_MAIN])
         self._build_axes(tabs[self.T_AXES])
         self._build_response(tabs[self.T_RESP])
@@ -2180,6 +2182,9 @@ class App(tk.Tk):
         self._build_view(tabs[self.T_VIEW])
         self._build_setup(tabs[self.T_SETUP])
         self.rs = x52_rsview.RsView(tabs[self.T_RS], self)   # вид «как RS Mapper» — первая вкладка
+        self.nb.bind("<<NotebookTabChanged>>", lambda e: self.nb.index("current") in (self.T_AXES, self.T_RESP)
+                     and self.share_refresh(), add="+")
+        self.apply_profile_select()
 
         self.bind("<Escape>", lambda e: self.cancel_learn())
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -2740,6 +2745,7 @@ class App(tk.Tk):
             "Чувствительность, кривая, задержка ручки и рыскания — на вкладке «Отклик ручки». "
             "Любую ось можно также назначить как кнопку на вкладке «Назначение».")
             ).grid(row=5, column=0, columnspan=3, sticky="w", padx=8, pady=(0, 6))
+        self._build_share_block(left, self.AXES_SHARE_KEYS, fill="x", pady=(8, 0))
 
         cal = ttk.LabelFrame(right, text="Калибровка РУД")
         cal.pack(fill="y")
@@ -2785,6 +2791,7 @@ class App(tk.Tk):
         for key, label in (("smooth", "Плавно"), ("standard", "Стандарт"), ("fast", "Быстро")):
             ttk.Button(pr, text=label, command=lambda k=key: self.apply_stick_preset(k)).pack(side="left", padx=3)
         ttk.Button(pr, text="Крен → Тангаж (скопировать)", command=self.copy_roll_to_pitch).pack(side="left", padx=12)
+        self._build_share_block(tab, self.RESP_SHARE_KEYS, side="bottom", fill="x", padx=10, pady=(0, 8))
 
         body = ttk.Frame(tab)
         body.pack(fill="both", expand=True, padx=6)
@@ -2892,12 +2899,96 @@ class App(tk.Tk):
         self.mark_dirty()
         self.set_hint("Настройки крена скопированы в тангаж.")
 
+    # ---- «Применить в профилях» на вкладках «Оси и РУД» / «Отклик ручки»
+    AXES_SHARE_KEYS = ("axes", "axes_enabled", "invert", "cam_deadzone", "poll_hz", "output", "throttle_cal")
+    RESP_SHARE_KEYS = ("response",)
+
+    def _build_share_block(self, parent, keys, **pack):
+        lf = ttk.LabelFrame(parent, text="Применить в профилях (галочка — там настройки этой вкладки такие же)")
+        lf.pack(**pack)
+        blk = {"frame": lf, "inner": ttk.Frame(lf), "keys": keys, "vars": {}}
+        blk["inner"].pack(fill="x", padx=6, pady=(2, 0))
+        br = ttk.Frame(lf)
+        br.pack(fill="x", padx=6, pady=(2, 6))
+        ttk.Button(br, text="Все", command=lambda: [v.set(True) for v in blk["vars"].values()]).pack(side="left")
+        ttk.Button(br, text="Ни одного", command=lambda: [v.set(False) for v in blk["vars"].values()]
+                   ).pack(side="left", padx=4)
+        ttk.Button(br, text="Применить в отмеченных", command=lambda: self.share_apply(blk)).pack(side="left")
+        ttk.Label(br, foreground="#555", text="Копирует настройки этой вкладки из текущего профиля."
+                  ).pack(side="left", padx=8)
+        self._share_blocks.append(blk)
+
+    def share_refresh(self):
+        """Галочки блоков «Применить в профилях»: стоят у профилей, где настройки вкладки такие же."""
+        cur = self.cfg["profile_name"]
+        names = self._all_profile_names()
+        other = {n: self._load_config(profile_path(n), silent=True) for n in names if n != cur}
+        for blk in self._share_blocks:
+            for ch in blk["inner"].winfo_children():
+                ch.destroy()
+            blk["vars"] = {}
+            mine = json.dumps({k: self.cfg[k] for k in blk["keys"]}, sort_keys=True)
+            for i, n in enumerate(names):
+                c = other.get(n)
+                v = tk.BooleanVar(value=n == cur or (c is not None and json.dumps(
+                    {k: c[k] for k in blk["keys"]}, sort_keys=True) == mine))
+                cb = ttk.Checkbutton(blk["inner"], text=n + (" (текущий)" if n == cur else ""), variable=v)
+                cb.grid(row=i // 4, column=i % 4, sticky="w", padx=(0, 14))
+                if n == cur:
+                    cb.state(["disabled"])
+                else:
+                    blk["vars"][n] = v
+
+    def share_apply(self, blk):
+        to = [n for n, v in blk["vars"].items() if v.get()]
+        done = []
+        for n in to:
+            c = self._load_config(profile_path(n), silent=True)
+            if c is None:
+                continue
+            c["profile_name"] = n
+            for k in blk["keys"]:
+                c[k] = json.loads(json.dumps(self.cfg[k]))
+            try:
+                write_json_atomic(profile_path(n), sanitize_config(c))
+                done.append(n)
+            except OSError as e:
+                log_error(f"Не удалось записать профиль {n}: {e}")
+        self.set_hint("Настройки вкладки скопированы в профили: " + ", ".join(done) + "." if done else
+                      "Отметьте профили, в которые скопировать настройки этой вкладки.")
+
+    def on_profile_select(self):
+        self.glob["profile_select"] = bool(self.prof_sel_var.get())
+        self.save_global()
+        self.apply_profile_select()
+        self.set_hint("Выбор профилей: " + ("включён" if self.glob["profile_select"] else
+                                            "выключен — настройки меняются только в текущем профиле"))
+
+    def apply_profile_select(self):
+        on = self.glob["profile_select"]
+        for blk in self._share_blocks:
+            x52_rsview.show_packed(blk["frame"], on)
+        self.rs.show_profile_lists(on)
+
     # ------------------------------------------------------------ вкладка «Режимы и автопрофиль»
     def _build_modes(self, tab):
         left = ttk.Frame(tab)
         left.pack(side="left", fill="both", expand=True, padx=(8, 4), pady=8)
         right = ttk.Frame(tab)
         right.pack(side="left", fill="both", expand=True, padx=(4, 8), pady=8)
+
+        sf = ttk.LabelFrame(right, text="Выбор профилей (общее для всех профилей)")
+        sf.pack(fill="x", pady=(0, 8))
+        self.prof_sel_var = tk.BooleanVar(value=self.glob["profile_select"])
+        ttk.Checkbutton(sf, variable=self.prof_sel_var, command=self.on_profile_select,
+                        text="Включить выбор профилей (галочки «в каких профилях»)").pack(anchor="w", padx=8,
+                                                                                          pady=(6, 2))
+        ttk.Label(sf, foreground="#555", wraplength=560, justify="left", text=(
+            "Галочки профилей — в окне кнопки / хатки / оси («Карта кнопок»), на «Мини-стик», «Зум», "
+            "«Оси и РУД», «Отклик ручки». "
+            "Выключено — всё настраивается только в текущем профиле (галочки «в каких профилях» скрыты). "
+            "На «Мини-стик» и «Зум» в списке — профили, выбранные ниже для положений колеса.")
+            ).pack(anchor="w", padx=8, pady=(0, 6))
 
         lf = ttk.LabelFrame(left, text="Слои по колесу режимов X52 (для «Своих действий» этого профиля)")
         lf.pack(fill="x")
@@ -3116,6 +3207,8 @@ class App(tk.Tk):
         w["enabled"] = bool(self.wheel_en.get())
         w["profiles"] = ["" if cb.get() == self.NO_PROFILE else cb.get() for cb in self.wheel_combo]
         self.save_global()
+        if hasattr(self, "rs"):
+            self._rs_prof_lists_refresh()
         self._wheel_pos = None                  # сразу применить текущее положение колеса
         if w["enabled"] and self.cfg["layers"]["enabled"]:
             self.set_hint("Внимание: колесо режимов сейчас и меняет профиль, и переключает слои этого профиля.")
@@ -4305,10 +4398,25 @@ class App(tk.Tk):
             self._wheel_ui_refresh()
         if hasattr(self, "rs"):
             self.rs.refresh()
-            sh = self.glob.get("ministick") or {"profiles": []}
-            self.rs.set_ministick_profiles(names, sh["profiles"])
-            zs = self.glob.get("zoom") or {"profiles": []}
-            self.rs.set_zoom_profiles(names, zs["profiles"])
+            self._rs_prof_lists_refresh()
+        if self._share_blocks:
+            self.share_refresh()
+
+    def wheel_profile_names(self):
+        """Профили, выбранные для положений колеса (без пустых, повторов и удалённых)."""
+        have = self._all_profile_names()
+        out = []
+        for p in self.glob["wheel"]["profiles"]:
+            if p and p in have and p not in out:
+                out.append(p)
+        return out
+
+    def _rs_prof_lists_refresh(self):
+        names = self.wheel_profile_names()
+        sh = self.glob.get("ministick") or {"profiles": []}
+        self.rs.set_ministick_profiles(names, sh["profiles"])
+        zs = self.glob.get("zoom") or {"profiles": []}
+        self.rs.set_zoom_profiles(names, zs["profiles"])
 
     def switch_profile(self, name):
         name = clean_profile_name(name)
@@ -4388,6 +4496,10 @@ class App(tk.Tk):
             if sh and old in sh["profiles"]:
                 sh["profiles"] = [new if p == old else p for p in sh["profiles"]]
                 self.save_global()
+        w = self.glob["wheel"]
+        if old in w["profiles"]:
+            w["profiles"] = [new if p == old else p for p in w["profiles"]]
+            self.save_global()
         self.cfg["profile_name"] = new
         self.save_cfg()
         self.refresh_profiles()
