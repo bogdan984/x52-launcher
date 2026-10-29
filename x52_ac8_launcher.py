@@ -83,7 +83,7 @@ from x52_core import (  # noqa: E402
 import x52_ministick  # noqa: E402
 
 APP_NAME = "X52 Launcher"
-APP_VERSION = "5.5.28"
+APP_VERSION = "5.5.29"
 # Собранный exe (PyInstaller): программа в Program Files (только чтение), настройки — в %APPDATA%.
 FROZEN = bool(getattr(sys, "frozen", False))
 APP_DIR = os.path.dirname(sys.executable if FROZEN else os.path.abspath(__file__))
@@ -1798,6 +1798,9 @@ class CustomActionDialog(tk.Toplevel):
                     textvariable=self.dur_var).grid(row=2, column=3, sticky="w")
         ttk.Label(self.seq_frame, foreground="#555", text=x52_rsview.SEQ_TIME_HINT).grid(
             row=3, column=0, columnspan=4, sticky="w", padx=6)
+        self.seq_hold = tk.BooleanVar(value=bool(ca.get("seq_hold")))
+        ttk.Checkbutton(self.seq_frame, text="Удержание: шаги идут, пока держите кнопку (отпустили — остановка)",
+                        variable=self.seq_hold).grid(row=5, column=0, columnspan=6, sticky="w", padx=6)
         bf = ttk.Frame(self.seq_frame)
         bf.grid(row=4, column=0, columnspan=6, sticky="w", padx=6, pady=6)
         ttk.Button(bf, text="Добавить шаг", command=self._add_step).pack(side="left")
@@ -1967,7 +1970,7 @@ class CustomActionDialog(tk.Toplevel):
             rep_ms = 100
         self.result = {"name": n[:60], "keys": list(self.keys), "mode": mode, "trigger": self.trig.get(),
                        "layer": int(self.layer.get()), "steps": [dict(st) for st in self.steps],
-                       "repeat_ms": max(30, min(2000, rep_ms)),
+                       "seq_hold": bool(self.seq_hold.get()), "repeat_ms": max(30, min(2000, rep_ms)),
                        "profile": {"kind": self.pkind.get(), "names": list(self.pnames)},
                        "cam": next((k for k, t, _p in DCS_CAM if t == self.cam_combo.get()), "left")}
         self.destroy()
@@ -3474,7 +3477,7 @@ class App(tk.Tk):
             if not (col.get("enabled") and col.get("special")) or slot not in src:
                 continue
             fields = {k: json.loads(json.dumps(src[slot][k])) for k in
-                      ("name", "keys", "mode", "trigger", "repeat_ms", "seq", "profile", "steps", "cam")
+                      ("name", "keys", "mode", "trigger", "repeat_ms", "seq", "seq_hold", "profile", "steps", "cam")
                       if k in src[slot]}
             ca = dst.get(slot)
             if ca is None:
@@ -5021,10 +5024,11 @@ class App(tk.Tk):
               "mode": data.get("mode", "hold"), "trigger": data.get("trigger", "press"),
               "layer": int(data.get("layer", 0)), "steps": [dict(st) for st in data.get("steps", [])],
               "repeat_ms": data.get("repeat_ms", 100), "profile": data.get("profile"),
-              "cam": data.get("cam"), "bindings": [None, None]}
+              "cam": data.get("cam"), "seq_hold": bool(data.get("seq_hold")), "bindings": [None, None]}
         tmp = sanitize_config(dict(self.cfg, custom_actions=[ca]))["custom_actions"][0]
         ca.update(steps=tmp["steps"], keys=tmp["keys"], mode=tmp["mode"], trigger=tmp["trigger"],
-                  layer=tmp["layer"], repeat_ms=tmp["repeat_ms"], profile=tmp["profile"], cam=tmp["cam"])
+                  layer=tmp["layer"], repeat_ms=tmp["repeat_ms"], profile=tmp["profile"], cam=tmp["cam"],
+                  seq_hold=tmp["seq_hold"])
         self.cfg["custom_actions"].append(ca)
         self.refresh_tree()
         self.mark_dirty()
@@ -5050,7 +5054,7 @@ class App(tk.Tk):
             tmp = sanitize_config(dict(self.cfg, custom_actions=[dict(ca, **data)]))["custom_actions"][0]
             ca.update(name=tmp["name"], keys=tmp["keys"], mode=tmp["mode"], trigger=tmp["trigger"],
                       layer=tmp["layer"], steps=tmp["steps"], repeat_ms=tmp["repeat_ms"], profile=tmp["profile"],
-                      cam=tmp["cam"])
+                      cam=tmp["cam"], seq_hold=tmp["seq_hold"])
             self.refresh_tree()
             self.mark_dirty()
 

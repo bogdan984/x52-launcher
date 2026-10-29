@@ -75,6 +75,21 @@ def test_repeat_seq_profile_kinds():
     assert rows[0][2][3] == "Хатка 1 ↗" and rows[0][2][6] == "80 мс" and rows[1][2][8] == "Запуск"
 
 
+def test_seq_hold_column_roundtrip():
+    cfg = prof()
+    cfg["sequences"] = [{"name": "Запуск", "steps": [{"keys": ["A"], "delay_ms": 0, "duration_ms": 50}]}]
+    b = {"type": "axis", "index": 5, "dir": "+", "thr": 0.5}
+    rv.apply_slots(cfg, b, 0, {"single": col(name="Старт", kind="seq", seq="Запуск", seq_hold=True),
+                               "long": col(enabled=False), "release": col(enabled=False)})
+    ca = rv.find_slots(cfg, b)["single"]
+    assert ca["mode"] == "sequence" and ca["seq_hold"] is True and ca["trigger"] == "press"
+    assert rv.column_from_ca(ca)["seq_hold"] is True
+    assert rv.mapped_rows(cfg, "X52")[0][2][6] == "пока держите"
+    sig = rv.ca_signature(ca)
+    ca["seq_hold"] = False
+    assert rv.ca_signature(ca) != sig
+
+
 def test_special_kept_and_shared_binding():
     cfg = prof()
     b, b2 = rv.btn_binding(1), rv.btn_binding(2)

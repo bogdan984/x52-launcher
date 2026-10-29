@@ -424,6 +424,8 @@ def custom_out_text(ca, layers_enabled=True):
             t += " · повтор %d мс" % ca["repeat_ms"]
         elif ca["mode"] == "tap":
             t += " · одно нажатие"
+    if ca["mode"] == "sequence" and ca.get("seq_hold"):
+        t += " · пока держите"
     if ca["trigger"] != "press":
         t += " · " + {"short": "короткое", "long": "долгое", "release": "отпускание"}[ca["trigger"]]
     if layers_enabled and ca["layer"]:
@@ -717,6 +719,7 @@ def sanitize_config(src):
         out["custom_actions"].append({
             "repeat_ms": int(_num(x.get("repeat_ms"), 100, 30, 2000)),
             "seq": x["seq"].strip()[:60] if isinstance(x.get("seq"), str) and x["seq"].strip() else "",
+            "seq_hold": bool(x.get("seq_hold", False)),
             "profile": {"kind": pt.get("kind") if pt.get("kind") in PROFILE_KINDS else "cycle", "names": pnames},
             "id": cid, "name": name, "keys": ks,
             "mode": x.get("mode") if x.get("mode") in CUSTOM_MODES else "hold",
@@ -1285,6 +1288,8 @@ class Mapper(object):
                 steps = action_steps(cfg, ca)
                 if event and aid not in self.seq_start:
                     self.seq_start[aid] = now
+                if ca["seq_hold"] and trig in ("press", "long") and not level:
+                    self.seq_start.pop(aid, None)   # «удержание»: отпустили — оставшиеся шаги не идут
                 if aid in self.seq_start:
                     el = (now - self.seq_start[aid]) * 1000.0
                     if el >= sequence_length_ms(steps):

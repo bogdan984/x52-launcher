@@ -774,6 +774,35 @@ class TestSequence:
         assert c.sequence_length_ms(st) == 10000
         assert c.custom_out_text(d["custom_actions"][0]) == "Последовательность: 2 шага, 10.0 с"
 
+    def test_hold_stops_on_release(self):
+        d = _prof([_act("q", [], 0, mode="sequence", steps=self.STEPS, seq_hold=True)])
+        assert d["custom_actions"][0]["seq_hold"] is True
+        assert c.custom_out_text(d["custom_actions"][0]).endswith("· пока держите")
+        s = Sim(d)
+        seen = s.run(550, b0=1)                          # держим — шаги идут по порядку
+        assert seen[0] == {"LCTRL", "HOME"} and seen[-1] == {"RSHIFT", "HOME"}
+        assert s.run(5, b0=0)[-1] == frozenset()         # отпустили — сразу стоп
+        assert s.run(300, b0=0) == [frozenset()] * 60    # оставшиеся шаги не идут
+        assert s.run(5, b0=1)[-1] == {"LCTRL", "HOME"}   # снова нажали — с начала
+
+    def test_hold_on_axis_range(self):
+        d = _prof([dict(_act("q", [], 0, mode="sequence", steps=self.STEPS, seq_hold=True),
+                        bindings=[{"type": "axis", "index": 5, "dir": "+", "thr": 0.5}, None])])
+        m, ax = c.Mapper(), [0.0] * 8
+        m.step(d, ax, [0] * 32, [], now=0.0)
+        ax[5] = 0.8                                      # крутилка в диапазоне — «нажата»
+        assert m.step(d, ax, [0] * 32, [], now=0.01)["keys"] == {"LCTRL", "HOME"}
+        assert m.step(d, ax, [0] * 32, [], now=0.53)["keys"] == {"RSHIFT", "HOME"}
+        ax[5] = 0.1                                      # вывели из диапазона — стоп
+        assert not m.step(d, ax, [0] * 32, [], now=0.62)["keys"]
+
+    def test_no_hold_default_runs_to_end(self):
+        d = _prof([_act("q", [], 0, mode="sequence", steps=self.STEPS)])
+        assert d["custom_actions"][0]["seq_hold"] is False
+        s = Sim(d)
+        s.run(5, b0=1)
+        assert s.run(550, b0=0)[-1] == {"RSHIFT", "HOME"}
+
 
 class TestAutoProfile:
     RULES = {"DCS World": {"processes": ["DCS.exe"], "aircraft": []},

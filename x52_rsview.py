@@ -113,7 +113,7 @@ def column_from_ca(ca):
     """Своё действие -> поля колонки окна. special = настроено иначе (переключатель и т.п.)."""
     col = {"enabled": True, "name": ca["name"], "kind": "key", "mods": [], "key": "", "repeat": False,
            "repeat_ms": ca["repeat_ms"], "continuous": False, "seq": "", "profile": "", "special": False,
-           "cam": ca.get("cam", "left")}
+           "cam": ca.get("cam", "left"), "seq_hold": bool(ca.get("seq_hold"))}
     m = ca["mode"]
     if m == "camera":
         col["kind"] = "cam"
@@ -146,7 +146,7 @@ def column_from_ca(ca):
 def ca_fields(col, slot, long_on):
     trig = {"single": "short" if long_on else "press", "long": "long", "release": "release"}[slot]
     f = {"name": (col.get("name") or "").strip()[:60] or "Действие", "trigger": trig, "keys": [],
-         "steps": [], "seq": "", "repeat_ms": int(col.get("repeat_ms") or 100),
+         "steps": [], "seq": "", "seq_hold": False, "repeat_ms": int(col.get("repeat_ms") or 100),
          "profile": {"kind": "cycle", "names": []}}
     if col["kind"] == "profile":
         f["mode"] = "profile"
@@ -156,6 +156,7 @@ def ca_fields(col, slot, long_on):
     elif col["kind"] == "seq":
         f["mode"] = "sequence"
         f["seq"] = col.get("seq", "")
+        f["seq_hold"] = bool(col.get("seq_hold"))
     elif col["kind"] == "cam":
         f["mode"] = "camera"
         f["cam"] = col.get("cam") or "left"
@@ -201,7 +202,7 @@ def apply_slots(cfg, b, layer, cols):
             cfg["custom_actions"].append(ca)
         ca.update(f)
         tmp = sanitize_config(dict(cfg, custom_actions=[ca]))["custom_actions"][0]
-        for k in ("name", "keys", "mode", "trigger", "repeat_ms", "seq", "profile", "steps", "cam"):
+        for k in ("name", "keys", "mode", "trigger", "repeat_ms", "seq", "seq_hold", "profile", "steps", "cam"):
             ca[k] = tmp[k]
 
 
@@ -212,7 +213,8 @@ def slot_signature(cfg, b, layer=0):
 
 def ca_signature(ca):
     return json.dumps([ca["mode"], ca["keys"], ca["trigger"], ca.get("seq", ""), ca["profile"],
-                       ca.get("cam", "left"), ca["repeat_ms"], ca["steps"]], sort_keys=True)
+                       ca.get("cam", "left"), ca["repeat_ms"], ca["steps"], bool(ca.get("seq_hold"))],
+                      sort_keys=True)
 
 
 def profiles_with(cfg, ca, b, others):
@@ -242,6 +244,8 @@ def mapped_rows(cfg, device, others=()):
                         "cycle": " → ".join(pt["names"])}[pt["kind"]]
             elif m == "sequence":
                 seq = ca.get("seq") or "(свои шаги)"
+                if ca.get("seq_hold"):
+                    rep = "пока держите"
             elif m == "camera":
                 key = "Обзор DCS: " + DCS_CAM_LABEL.get(ca.get("cam"), "?")
             else:
@@ -501,6 +505,9 @@ class ActionColumn(tk.Frame):
         self.seq.pack(side="left")
         if edit_seqs:
             ttk.Button(sr, text="Создать / изменить…", command=lambda: edit_seqs(self)).pack(side="left", padx=(4, 0))
+        self.seq_hold = tk.BooleanVar()
+        ttk.Checkbutton(gs, text="удержание (шаги идут, пока держите кнопку)", variable=self.seq_hold).pack(
+            anchor="w", padx=2, pady=(0, 4))
         ttk.Radiobutton(b, text="Смена профиля", variable=self.kind, value="profile",
                         command=self._state).pack(anchor="w")
         gp = ttk.LabelFrame(b, text="")
@@ -562,6 +569,7 @@ class ActionColumn(tk.Frame):
         self.rep_ms.set(str(col.get("repeat_ms", 100)))
         self.cont.set(col.get("continuous", False))
         self.seq.set(col.get("seq", ""))
+        self.seq_hold.set(col.get("seq_hold", False))
         self.prof.set(col.get("profile", ""))
         self.cam.set(DCS_CAM_LABEL.get(col.get("cam") or "left", ""))
         self.special_lbl.configure(text="Это действие настроено особо (переключатель / профили по кругу / свои "
@@ -579,7 +587,7 @@ class ActionColumn(tk.Frame):
                 "kind": self.kind.get(), "mods": [k for k, v in self.mods.items() if v.get()],
                 "key": PLAIN_KEYS[names.index(kt)] if kt in names else "", "repeat": bool(self.rep.get()),
                 "repeat_ms": rep_ms, "continuous": bool(self.cont.get()), "seq": self.seq.get(),
-                "profile": self.prof.get(),
+                "seq_hold": bool(self.seq_hold.get()), "profile": self.prof.get(),
                 "cam": next((k for k, t, _p in DCS_CAM if t == self.cam.get()), "left")}
 
 
@@ -604,7 +612,8 @@ class RsActionDialog(tk.Toplevel):
         ttk.Label(self, foreground="#555", wraplength=600, justify="left", text=(
             "Если включено долгое нажатие, обычное срабатывает, только если отпустить кнопку раньше порога "
             "(«Режимы и автопрофиль» → «Долгое нажатие»). «Непрерывно» — клавиша держится, пока держите "
-            "кнопку; без него — одно короткое нажатие.")).pack(anchor="w", padx=10)
+            "кнопку; без него — одно короткое нажатие. «Удержание» у последовательности — шаги идут, пока держите "
+            "кнопку (или ось в заданном диапазоне); отпустили — оставшиеся шаги не выполняются.")).pack(anchor="w", padx=10)
         self.prof_vars = {}
         if share:                      # (все профили, текущий, где уже так же)
             names, cur, same = share
