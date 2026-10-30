@@ -83,7 +83,7 @@ from x52_core import (  # noqa: E402
 import x52_ministick  # noqa: E402
 
 APP_NAME = "X52 Launcher"
-APP_VERSION = "5.5.31"
+APP_VERSION = "5.5.32"
 # Собранный exe (PyInstaller): программа в Program Files (только чтение), настройки — в %APPDATA%.
 FROZEN = bool(getattr(sys, "frozen", False))
 APP_DIR = os.path.dirname(sys.executable if FROZEN else os.path.abspath(__file__))

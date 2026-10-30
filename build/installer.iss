@@ -1,4 +1,4 @@
-; X52 Launcher — установщик (Inno Setup 6). Собирается build/build.sh.
+﻿; X52 Launcher — установщик (Inno Setup 6). Собирается build/build.sh.
 #define AppName "X52 Launcher"
 #ifndef AppVersion
   #define AppVersion "5.0.0"
@@ -36,6 +36,8 @@ Name: "vigem"; Description: "Установить драйвер ViGEmBus (ви�
 Source: "..\dist\X52 Launcher\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\README.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\MANUAL.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\ПРИМЕР_СУ-27.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\ОБЗОР_DCS_НАСТРОЙКА.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "redist\ViGEmBus_setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Tasks: vigem
 
 [Icons]

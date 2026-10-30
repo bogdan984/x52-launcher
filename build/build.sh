@@ -23,6 +23,7 @@ wine python -m PyInstaller --noconfirm --clean --windowed --onedir --noupx \
 chown -R $(id -u):$(id -g) dist build/work
 "
 chmod 777 "$ROOT/dist"          # в amake/innosetup другой пользователь
-docker run --rm -v "$ROOT":/work -w /work/build amake/innosetup /Q /DAppVersion=$VERSION installer.iss
+# LANG=C.UTF-8 — иначе Wine не видит файлы с русскими именами (ПРИМЕР_СУ-27.txt и т.п.)
+docker run --rm -e LANG=C.UTF-8 -e LC_ALL=C.UTF-8 -v "$ROOT":/work -w /work/build amake/innosetup /Q /DAppVersion=$VERSION installer.iss
 chmod 755 "$ROOT/dist"
 ls -la "$ROOT/dist"

@@ -329,6 +329,7 @@ MAX_STEPS = 50
 SEQ_MAX_DELAY_MS = 300000   # шаг последовательности может начаться до 5 мин от нажатия
 SEQ_CYCLE_RESET_MAX_MS = 10000   # «по кругу»: удержание для сброса к первому шагу
 SEQ_CYCLE_RESET_MIN_MS = 100
+HOLD_DELAY_MAX_MS = 10000        # «непрерывно»: клавиша жмётся, только если кнопку держат дольше этого
 MAX_CUSTOM = 200
 _BAD_NAME = re.compile('[<>:"/\\\\|?*\\x00-\\x1f]')   # символы, запрещённые в именах файлов Windows
 
@@ -433,6 +434,8 @@ def custom_out_text(ca, layers_enabled=True):
             t += " · повтор %d мс" % ca["repeat_ms"]
         elif ca["mode"] == "tap":
             t += " · одно нажатие"
+        elif ca["mode"] == "hold" and ca.get("hold_delay_ms"):
+            t += " · держать > %d мс" % ca["hold_delay_ms"]
     if ca["mode"] == "sequence" and ca.get("seq_hold"):
         t += " · пока держите"
     if ca["mode"] == "sequence" and ca.get("seq_cycle"):
@@ -742,6 +745,7 @@ def sanitize_config(src):
             "seq_cycle_reset": cyc_reset,
             "seq_cycle_reset_ms": cyc_ms,
             "seq_cycle_profile_reset": bool(x.get("seq_cycle_profile_reset", True)),
+            "hold_delay_ms": int(_num(x.get("hold_delay_ms"), 0, 0, HOLD_DELAY_MAX_MS)),
             "profile": {"kind": pt.get("kind") if pt.get("kind") in PROFILE_KINDS else "cycle", "names": pnames},
             "id": cid, "name": name, "keys": ks,
             "mode": x.get("mode") if x.get("mode") in CUSTOM_MODES else "hold",
@@ -1371,7 +1375,9 @@ class Mapper(object):
                             self.tap_queue.append(list(ca["keys"]))
                     on = now < self.tap_until.get(aid, 0.0)
                 else:
-                    on = level
+                    # «непрерывно» с задержкой: клавиша — только после hold_delay_ms удержания
+                    dl = ca.get("hold_delay_ms", 0) / 1000.0 if mode == "hold" else 0.0
+                    on = level and (not dl or now - self.press_t.get(aid, now) >= dl)
                 if on and mode == "camera":
                     self.custom_cam.add(DCS_CAM_PAD.get(ca.get("cam"), "CAM_LEFT"))
                 elif on and not tapped:

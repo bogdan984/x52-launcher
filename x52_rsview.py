@@ -12,7 +12,7 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
 from x52_core import (ALL_KEYS, AXIS_ROLES, CUSTOM_PREFIX, DCS_CAM, DCS_CAM_LABEL, HAT8, HAT8_NAME, HAT8_ORDER,
-                      MAX_STEPS, MODIFIER_KEYS, SEQ_CYCLE_RESET_MAX_MS, SEQ_CYCLE_RESET_MIN_MS, SEQ_MAX_DELAY_MS,
+                      HOLD_DELAY_MAX_MS, MAX_STEPS, MODIFIER_KEYS, SEQ_CYCLE_RESET_MAX_MS, SEQ_CYCLE_RESET_MIN_MS, SEQ_MAX_DELAY_MS,
                       action_steps, analog_axis, binding_text, clean_steps, find_custom, key_text, keys_text, new_custom_id,
                       sanitize_config)
 
@@ -116,7 +116,7 @@ def column_from_ca(ca, cfg=None):
            "cam": ca.get("cam", "left"), "seq_hold": bool(ca.get("seq_hold")),
            "cycle_steps": [], "cycle_hold_ms": 100, "seq_cycle_reset": ca.get("seq_cycle_reset", True),
            "seq_cycle_reset_ms": ca.get("seq_cycle_reset_ms", 1000),
-           "seq_cycle_profile_reset": ca.get("seq_cycle_profile_reset", True)}
+           "seq_cycle_profile_reset": ca.get("seq_cycle_profile_reset", True), "hold_delay_ms": 1000}
     m = ca["mode"]
     if m == "sequence" and ca.get("seq_cycle"):
         # перебор по кругу: шаги — прямо в окне (сделанный из библиотечной последовательности — её копия)
@@ -149,6 +149,8 @@ def column_from_ca(ca, cfg=None):
         col["key"] = rest[0] if rest else ""
         col["repeat"] = m == "repeat"
         col["continuous"] = m == "hold"
+        if m == "hold":
+            col["hold_delay_ms"] = ca.get("hold_delay_ms", 0)
     return col
 
 
@@ -182,6 +184,8 @@ def ca_fields(col, slot, long_on):
     else:
         f["keys"] = [k for k in MODIFIER_KEYS if k in col.get("mods", [])] + ([col["key"]] if col.get("key") else [])
         f["mode"] = "repeat" if col.get("repeat") else ("hold" if col.get("continuous") else "tap")
+        if f["mode"] == "hold":
+            f["hold_delay_ms"] = col.get("hold_delay_ms", 1000)
     return f
 
 
@@ -224,7 +228,7 @@ def apply_slots(cfg, b, layer, cols):
         ca.update(f)
         tmp = sanitize_config(dict(cfg, custom_actions=[ca]))["custom_actions"][0]
         for k in ("name", "keys", "mode", "trigger", "repeat_ms", "seq", "seq_hold", "seq_cycle", "seq_cycle_reset",
-                  "seq_cycle_reset_ms", "seq_cycle_profile_reset", "profile", "steps", "cam"):
+                  "seq_cycle_reset_ms", "seq_cycle_profile_reset", "hold_delay_ms", "profile", "steps", "cam"):
             ca[k] = tmp[k]
 
 
@@ -237,7 +241,7 @@ def ca_signature(ca):
     return json.dumps([ca["mode"], ca["keys"], ca["trigger"], ca.get("seq", ""), ca["profile"],
                        ca.get("cam", "left"), ca["repeat_ms"], ca["steps"], bool(ca.get("seq_hold")),
                        bool(ca.get("seq_cycle")), ca.get("seq_cycle_reset", True), ca.get("seq_cycle_reset_ms", 1000),
-                       ca.get("seq_cycle_profile_reset", True)],
+                       ca.get("seq_cycle_profile_reset", True), ca.get("hold_delay_ms", 0)],
                       sort_keys=True)
 
 
@@ -520,8 +524,15 @@ class ActionColumn(tk.Frame):
         ttk.Spinbox(gk, from_=30, to=2000, increment=10, width=6, textvariable=self.rep_ms).grid(
             row=5, column=2, sticky="w", pady=(4, 0))
         self.cont = tk.BooleanVar()
-        ttk.Checkbutton(gk, text="непрерывно (держать)", variable=self.cont).grid(
-            row=6, column=0, columnspan=3, sticky="w", padx=2, pady=(0, 4))
+        hd = ttk.Frame(gk)
+        hd.grid(row=6, column=0, columnspan=3, sticky="w", padx=2, pady=(0, 4))
+        ttk.Checkbutton(hd, text="непрерывно (держать) >", variable=self.cont,
+                        command=self._state).pack(side="left")
+        self.hold_ms = tk.StringVar(value="1000")
+        self.hold_spin = ttk.Spinbox(hd, from_=0, to=HOLD_DELAY_MAX_MS, increment=100, width=6,
+                                     textvariable=self.hold_ms)
+        self.hold_spin.pack(side="left", padx=(4, 0))
+        ttk.Label(hd, text="мс").pack(side="left", padx=(4, 0))
         ttk.Radiobutton(b, text="Последовательность нажатий", variable=self.kind, value="seq",
                         command=self._state).pack(anchor="w")
         gs = ttk.LabelFrame(b, text="")
@@ -665,6 +676,8 @@ class ActionColumn(tk.Frame):
         walk(self.body)
         if st == "normal" and not self.cyc_reset_on.get():
             self.cyc_reset_spin.configure(state="disabled")
+        if st == "normal" and not self.cont.get():
+            self.hold_spin.configure(state="disabled")
         self.special_lbl.configure(state="normal")
 
     def set(self, col):
@@ -678,6 +691,7 @@ class ActionColumn(tk.Frame):
         self.rep.set(col.get("repeat", False))
         self.rep_ms.set(str(col.get("repeat_ms", 100)))
         self.cont.set(col.get("continuous", False))
+        self.hold_ms.set(str(col.get("hold_delay_ms", 1000)))
         self.seq.set(col.get("seq", ""))
         self.seq_hold.set(col.get("seq_hold", False))
         self.cycle_steps = [list(k) for k in col.get("cycle_steps", [])]
@@ -704,13 +718,18 @@ class ActionColumn(tk.Frame):
         except ValueError:
             cyc_ms = 1000
         try:
+            hold_ms = max(0, min(HOLD_DELAY_MAX_MS, int(float(self.hold_ms.get()))))
+        except ValueError:
+            hold_ms = 1000
+        try:
             hold = max(10, min(10000, int(float(self.cyc_hold.get()))))
         except ValueError:
             hold = 100
         return {"enabled": bool(self.en.get()), "special": self.special, "name": self.name.get(),
                 "kind": self.kind.get(), "mods": [k for k, v in self.mods.items() if v.get()],
                 "key": PLAIN_KEYS[names.index(kt)] if kt in names else "", "repeat": bool(self.rep.get()),
-                "repeat_ms": rep_ms, "continuous": bool(self.cont.get()), "seq": self.seq.get(),
+                "repeat_ms": rep_ms, "continuous": bool(self.cont.get()), "hold_delay_ms": hold_ms,
+                "seq": self.seq.get(),
                 "seq_hold": bool(self.seq_hold.get()), "cycle_steps": [list(k) for k in self.cycle_steps],
                 "cycle_hold_ms": hold, "seq_cycle_reset": bool(self.cyc_reset_on.get()),
                 "seq_cycle_reset_ms": cyc_ms, "seq_cycle_profile_reset": bool(self.cyc_prof.get()),
