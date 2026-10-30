@@ -148,3 +148,72 @@ def test_axis_inputs_threshold_and_names():
     assert rv.axis_roles(d, 2) == ["throttle"]
     d["axes_enabled"]["throttle"] = False
     assert rv.axis_roles(d, 2) == []
+
+
+
+def test_cycle_kind_roundtrip():
+    """5.5.31: «Перебор по кругу» — шаги прямо в колонке, у каждого шага своя клавиша."""
+    cfg = prof()
+    b = rv.btn_binding(6)
+    rv.apply_slots(cfg, b, 0, {"single": col(name="Оружие", kind="cycle", cycle_steps=[["1"], ["LSHIFT", "2"], ["3"]],
+                                             cycle_hold_ms=120, seq_cycle_reset=True, seq_cycle_reset_ms=1500,
+                                             seq_cycle_profile_reset=False),
+                               "long": OFF, "release": OFF})
+    ca = rv.find_slots(cfg, b)["single"]
+    assert ca["mode"] == "sequence" and ca["seq_cycle"] is True and ca["seq"] == "" and ca["seq_hold"] is False
+    assert [st["keys"] for st in ca["steps"]] == [["1"], ["LSHIFT", "2"], ["3"]]       # порядок как в списке
+    assert {st["duration_ms"] for st in ca["steps"]} == {120}
+    assert ca["seq_cycle_reset"] is True and ca["seq_cycle_reset_ms"] == 1500 and ca["seq_cycle_profile_reset"] is False
+    back = rv.column_from_ca(ca, cfg)
+    assert back["kind"] == "cycle" and not back["special"]
+    assert back["cycle_steps"] == [["1"], ["LSHIFT", "2"], ["3"]] and back["cycle_hold_ms"] == 120
+    assert back["seq_cycle_reset"] is True and back["seq_cycle_reset_ms"] == 1500
+    assert back["seq_cycle_profile_reset"] is False
+    row = rv.mapped_rows(cfg, "X52")[0][2]
+    assert row[6] == "по кругу" and "1 → Shift (лев.) + 2 → 3" in row
+    assert c.custom_out_text(ca).startswith("Перебор по кругу: 1 → Shift (лев.) + 2 → 3")
+    # повторное применение той же колонки ничего не меняет
+    sig = rv.ca_signature(ca)
+    rv.apply_slots(cfg, b, 0, {"single": back, "long": OFF, "release": OFF})
+    assert rv.ca_signature(rv.find_slots(cfg, b)["single"]) == sig
+    for k, v in (("seq_cycle", False), ("seq_cycle_reset", False), ("seq_cycle_reset_ms", 900),
+                 ("seq_cycle_profile_reset", True)):
+        assert rv.ca_signature(dict(ca, **{k: v})) != sig, k       # «Применить в профилях» видит разницу
+
+
+def test_cycle_kind_reset_off_and_order_change():
+    cfg = prof()
+    b = rv.btn_binding(7)
+    cyc = col(name="W", kind="cycle", cycle_steps=[["A"], ["B"]], seq_cycle_reset=False)
+    rv.apply_slots(cfg, b, 0, {"single": cyc, "long": OFF, "release": OFF})
+    ca = rv.find_slots(cfg, b)["single"]
+    assert ca["seq_cycle_reset"] is False and ca["seq_cycle_reset_ms"] == 1000
+    assert "к 1-му шагу" not in c.custom_out_text(ca)
+    rv.apply_slots(cfg, b, 0, {"single": dict(cyc, cycle_steps=[["B"], ["A"]]), "long": OFF, "release": OFF})
+    assert [st["keys"] for st in rv.find_slots(cfg, b)["single"]["steps"]] == [["B"], ["A"]]
+    # переключили на обычную клавишу — «по кругу» снимается
+    rv.apply_slots(cfg, b, 0, {"single": col(name="W", key="Z"), "long": OFF, "release": OFF})
+    ca = rv.find_slots(cfg, b)["single"]
+    assert ca["mode"] == "tap" and ca["seq_cycle"] is False and ca["steps"] == []
+
+
+def test_cycle_kind_problem_without_steps():
+    assert rv.column_problem(col(kind="cycle", cycle_steps=[])) == "добавьте шаги перебора («+ шаг»)"
+    assert rv.column_problem(col(kind="cycle", cycle_steps=[["A"]])) is None
+
+
+def test_cycle_from_library_sequence_shown_as_steps():
+    """Сделанный в 5.5.30 «по кругу» из библиотечной последовательности открывается как перебор с её шагами."""
+    cfg = prof()
+    cfg["sequences"] = [{"name": "Оружие", "steps": [{"keys": ["1"], "delay_ms": 0, "duration_ms": 70},
+                                                     {"keys": ["2"], "delay_ms": 100, "duration_ms": 70}]}]
+    b = rv.btn_binding(8)
+    cfg["custom_actions"].append({"id": "q1", "name": "Оружие", "keys": [], "mode": "sequence", "seq": "Оружие",
+                                  "seq_cycle": True, "bindings": [b, None]})
+    cfg = c.sanitize_config(cfg)
+    ca = rv.find_slots(cfg, b)["single"]
+    back = rv.column_from_ca(ca, cfg)
+    assert back["kind"] == "cycle" and back["cycle_steps"] == [["1"], ["2"]] and back["cycle_hold_ms"] == 70
+    rv.apply_slots(cfg, b, 0, {"single": back, "long": OFF, "release": OFF})
+    ca = rv.find_slots(cfg, b)["single"]
+    assert ca["seq"] == "" and [st["keys"] for st in ca["steps"]] == [["1"], ["2"]]   # теперь свои шаги

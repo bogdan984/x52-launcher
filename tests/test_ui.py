@@ -1044,6 +1044,236 @@ def test_layers_short_long_sequence_live(app):
     assert app.glob["wheel"]["buttons"] == [23, 24, 25]
 
 
+def test_5530_sequence_cycle_live(app):
+    """Через настоящий рабочий поток: «по кругу» — нажатие = следующий шаг, сброс удержанием, смена профиля."""
+    prev = app.cfg["profile_name"]
+    app.create_profile("Цикл-А", "custom")
+    X52.buttons[18] = 0
+
+    def press(hold=0.05):
+        KEYLOG.log.clear()
+        X52.buttons[18] = 1
+        pump(app, hold)
+        X52.buttons[18] = 0
+        pump(app, 0.2)
+        return [k for k, down in KEYLOG.log if down]
+
+    try:
+        if not app.worker.bridge_on:
+            app.toggle_bridge()
+        assert wait(app, lambda: app.worker.bridge_on)
+        steps = [{"keys": ["A"], "delay_ms": 0, "duration_ms": 60},
+                 {"keys": ["LSHIFT", "B"], "delay_ms": 100, "duration_ms": 60},
+                 {"keys": ["C"], "delay_ms": 200, "duration_ms": 60}]
+        ca = app.custom_add({"name": "Оружие", "keys": [], "mode": "sequence", "trigger": "press", "layer": 0,
+                             "steps": steps, "seq_cycle": True, "seq_cycle_reset": True, "seq_cycle_reset_ms": 400,
+                             "seq_cycle_profile_reset": True})
+        assert ca["seq_cycle"] and ca["seq_cycle_reset"] and ca["seq_cycle_reset_ms"] == 400
+        assert "к 1-му шагу: держать 400 мс" in app.tree.item("custom:" + ca["id"], "values")[2]
+        ca["bindings"][0] = {"type": "button", "index": 18}
+        app.refresh_tree()
+        assert press() == ["A"]
+        assert sorted(press()) == ["B", "LSHIFT"]               # шаг 2 — свои клавиши, с модификатором
+        assert press() == ["C"]
+        assert press() == ["A"]                                 # по кругу
+        assert press(0.6) == []                                 # держали дольше 400 мс — сброс, без клавиш
+        assert press() == ["A"]
+        assert app.worker.keys.down == set()
+        # галочка «к 1-му шагу» снята — шаг сразу при нажатии, долгое удержание не сбрасывает
+        app.tree.selection_set("custom:" + ca["id"])
+        app.custom_edit(dict(ca, seq_cycle_reset=False))
+        assert ca["seq_cycle_reset"] is False and ca["seq_cycle_reset_ms"] == 400
+        KEYLOG.log.clear()
+        X52.buttons[18] = 1
+        assert wait(app, lambda: ("LSHIFT", True) in KEYLOG.log or ("B", True) in KEYLOG.log, sec=0.5)
+        pump(app, 0.6)
+        X52.buttons[18] = 0
+        pump(app, 0.2)
+        assert press() == ["C"]                                 # не сбросилось
+        app.custom_edit(dict(ca, seq_cycle_reset=True))
+        assert press(0.6) == []
+        # смена профиля с галочкой «с 1-го шага»
+        app.save_cfg()
+        assert press() == ["A"]
+        app.create_profile("Цикл-Б", "custom")
+        pump(app, 0.1)
+        app.switch_profile("Цикл-А")
+        pump(app, 0.1)
+        ca = app.cfg["custom_actions"][0]
+        assert ca["seq_cycle"] and ca["seq_cycle_reset_ms"] == 400          # сохранилось в файле профиля
+        assert press() == ["A"]
+        # без галочки — продолжает с того же места
+        app.tree.selection_set("custom:" + ca["id"])
+        app.custom_edit(dict(ca, seq_cycle_profile_reset=False))
+        assert ca["seq_cycle_profile_reset"] is False
+        app.save_cfg()
+        assert sorted(press()) == ["B", "LSHIFT"]
+        app.switch_profile("Цикл-Б")
+        pump(app, 0.1)
+        app.switch_profile("Цикл-А")
+        pump(app, 0.1)
+        assert press() == ["C"]
+    finally:
+        X52.buttons[18] = 0
+        for n in ("Цикл-Б", "Цикл-А"):
+            if n in app.L.list_profiles():
+                app.switch_profile(n)
+                app.profile_delete(confirm=False)
+        if prev in app.L.list_profiles():
+            app.switch_profile(prev)
+    assert "Цикл-А" not in app.L.list_profiles()
+
+
+def test_5530_cycle_dialog(app):
+    d = app.L.CustomActionDialog(app, "Тест", {"name": "Оружие", "mode": "sequence", "steps": [
+        {"keys": ["1"], "delay_ms": 0, "duration_ms": 50}]})
+    try:
+        assert d.seq_cycle.get() is False and d.cyc_reset_var.get() == "1000" and d.cyc_prof.get() is True
+        assert d.cyc_reset_on.get() is True and str(d.cyc_reset_spin.cget("state")) == "normal"
+        d.seq_hold.set(True)
+        d.seq_cycle.set(True)
+        cb = [w for w in d.seq_frame.winfo_children() if isinstance(w, app.L.ttk.Checkbutton)
+              and str(w.cget("text")).startswith("По кругу")][0]
+        cb.invoke()                                     # снять
+        cb.invoke()                                     # поставить — «удержание» снимается
+        assert d.seq_cycle.get() is True and d.seq_hold.get() is False
+        reset_cb = [w for f in d.seq_frame.winfo_children() if isinstance(f, app.L.ttk.Frame)
+                    for w in f.winfo_children() if isinstance(w, app.L.ttk.Checkbutton)][0]
+        assert str(reset_cb.cget("text")).startswith("Вернуться к 1-му шагу")
+        reset_cb.invoke()                               # снять галочку — время недоступно
+        assert d.cyc_reset_on.get() is False and str(d.cyc_reset_spin.cget("state")) == "disabled"
+        d.cyc_reset_var.set("99999")
+        d.cyc_prof.set(False)
+        d._ok()
+        r = d.result
+        assert r["seq_cycle"] is True and r["seq_hold"] is False and r["seq_cycle_reset"] is False
+        assert r["seq_cycle_reset_ms"] == core.SEQ_CYCLE_RESET_MAX_MS and r["seq_cycle_profile_reset"] is False
+    finally:
+        if d.winfo_exists():
+            d.destroy()
+    d = app.L.CustomActionDialog(app, "Тест", {"name": "Оружие", "mode": "sequence", "seq_cycle": True,
+                                              "seq_cycle_reset": False, "seq_cycle_reset_ms": 700,
+                                              "seq_cycle_profile_reset": False,
+                                              "steps": [{"keys": ["1"], "delay_ms": 0, "duration_ms": 50}]})
+    try:
+        assert d.seq_cycle.get() is True and d.cyc_reset_on.get() is False and d.cyc_reset_var.get() == "700"
+        assert str(d.cyc_reset_spin.cget("state")) == "disabled" and d.cyc_prof.get() is False
+        d.cyc_reset_var.set("abc")
+        d._ok()
+        assert d.result["seq_cycle_reset_ms"] == 1000
+    finally:
+        if d.winfo_exists():
+            d.destroy()
+
+
+def test_5531_cycle_column_in_button_map(app):
+    """«Карта кнопок»: пункт «Перебор по кругу» — шаги прямо в окне кнопки."""
+    import x52_rsview as rv
+    off = {"enabled": False, "name": "", "kind": "key", "mods": [], "key": "", "repeat": False,
+           "repeat_ms": 100, "continuous": False, "seq": "", "profile": "", "special": False, "cam": "left"}
+    picks = [["1"], ["LSHIFT", "2"], ["3"], ["4"]]
+    dlg = rv.RsActionDialog(app, "Тест", {s: dict(off) for s in rv.SLOTS}, [], [], lambda: picks.pop(0))
+    try:
+        col = dlg.cols["single"]
+        col.en.set(True)
+        col._state()
+        g = col.get()
+        assert g["seq_cycle_reset"] is True and g["seq_cycle_reset_ms"] == 1000 and g["seq_cycle_profile_reset"]
+        col._cyc_add()                                  # «+ шаг» — клавиша с клавиатуры, пункт выбирается сам
+        assert col.kind.get() == "cycle"
+        col._cyc_add()
+        col._cyc_add()
+        assert col.cyc_lb.get(0, "end") == ("1. 1", "2. Shift (лев.) + 2", "3. 3")
+        col.cyc_lb.selection_clear(0, "end")
+        col.cyc_lb.selection_set(0)
+        col._cyc_move(1)                                # ↓
+        assert col.cycle_steps == [["LSHIFT", "2"], ["1"], ["3"]] and col.cyc_lb.curselection() == (1,)
+        col._cyc_move(-1)                               # ↑
+        col._cyc_move(-1)                               # уже первый — ничего
+        assert col.cycle_steps == [["1"], ["LSHIFT", "2"], ["3"]]
+        col.cyc_lb.selection_clear(0, "end")
+        col.cyc_lb.selection_set(2)
+        col._cyc_edit()                                 # «Изменить» — новая клавиша
+        assert col.cycle_steps[2] == ["4"]
+        col._cyc_del()                                  # «−»
+        assert col.cycle_steps == [["1"], ["LSHIFT", "2"]] and col.cyc_lb.curselection() == (1,)
+        # галочка «к 1-му шагу» снята — поле времени недоступно, время не теряется
+        col.cyc_reset_ms.set("1500")
+        col.cyc_reset_on.set(False)
+        col._state()
+        assert str(col.cyc_reset_spin.cget("state")) == "disabled"
+        col.cyc_reset_on.set(True)
+        col._state()
+        assert str(col.cyc_reset_spin.cget("state")) == "normal"
+        col.cyc_reset_on.set(False)
+        col.cyc_hold.set("150")
+        col.cyc_prof.set(False)
+        g = col.get()
+        assert g["kind"] == "cycle" and g["cycle_steps"] == [["1"], ["LSHIFT", "2"]] and g["cycle_hold_ms"] == 150
+        assert g["seq_cycle_reset"] is False and g["seq_cycle_reset_ms"] == 1500 and not g["seq_cycle_profile_reset"]
+        col.cyc_reset_ms.set("5")
+        assert col.get()["seq_cycle_reset_ms"] == core.SEQ_CYCLE_RESET_MIN_MS
+        col.cyc_reset_ms.set("x")
+        col.cyc_hold.set("y")
+        assert col.get()["seq_cycle_reset_ms"] == 1000 and col.get()["cycle_hold_ms"] == 100
+        # пустой перебор — OK не закрывает окно
+        warn = []
+        orig = rv.messagebox.showwarning
+        rv.messagebox.showwarning = lambda *a, **k: warn.append(a)
+        try:
+            col.cycle_steps = []
+            dlg._ok()
+        finally:
+            rv.messagebox.showwarning = orig
+        assert warn and "добавьте шаги перебора" in warn[0][1] and dlg.result is None
+        # set() другой колонкой — список шагов заменяется
+        col.set(dict(off, enabled=True, kind="cycle", cycle_steps=[["A"]], cycle_hold_ms=80, seq_cycle_reset=False,
+                     seq_cycle_reset_ms=2000, seq_cycle_profile_reset=False))
+        assert col.cyc_lb.get(0, "end") == ("1. A (Ф)",) and col.cyc_hold.get() == "80"
+        assert col.cyc_reset_on.get() is False and col.cyc_reset_ms.get() == "2000"
+        assert str(col.cyc_reset_spin.cget("state")) == "disabled"
+    finally:
+        dlg.destroy()
+
+
+def test_5531_cycle_via_button_map_live(app, monkeypatch):
+    """Полный путь: «Карта кнопок» → кнопка → «Перебор по кругу» → OK → нажатия X52 дают шаги по кругу."""
+    import x52_rsview as rv
+    prev = app.cfg["profile_name"]
+    app.create_profile("Цикл-К", "custom")
+    try:
+        if not app.worker.bridge_on:
+            app.toggle_bridge()
+        assert wait(app, lambda: app.worker.bridge_on)
+        b = rv.btn_binding(19)
+        cols = {s: {"enabled": False, "name": "", "kind": "key", "mods": [], "key": "", "repeat": False,
+                    "repeat_ms": 100, "continuous": False, "seq": "", "profile": "", "special": False, "cam": "left"}
+                for s in rv.SLOTS}
+        cols["single"] = dict(cols["single"], enabled=True, name="Оружие", kind="cycle",
+                              cycle_steps=[["Q"], ["W"]], cycle_hold_ms=60, seq_cycle_reset=True,
+                              seq_cycle_reset_ms=500, seq_cycle_profile_reset=True)
+        app.rs.open_dialog(b, cols=cols)
+        ca = rv.find_slots(app.cfg, b)["single"]
+        assert ca["seq_cycle"] and [st["keys"] for st in ca["steps"]] == [["Q"], ["W"]]
+        assert rv.column_from_ca(ca, app.cfg)["kind"] == "cycle"                 # снова открывается как перебор
+
+        def press(hold=0.05):
+            KEYLOG.log.clear()
+            X52.buttons[19] = 1
+            pump(app, hold)
+            X52.buttons[19] = 0
+            pump(app, 0.2)
+            return [k for k, down in KEYLOG.log if down]
+        assert [press(), press(), press()] == [["Q"], ["W"], ["Q"]]
+        assert press(0.7) == [] and press() == ["Q"]
+    finally:
+        X52.buttons[19] = 0
+        if "Цикл-К" in app.L.list_profiles():
+            app.switch_profile("Цикл-К")
+            app.profile_delete(confirm=False)
+        if prev in app.L.list_profiles():
+            app.switch_profile(prev)
+
 def test_auto_switch_process_and_dcs_aircraft(app, monkeypatch, tmp_path):
     L = app.L
     import socket as so

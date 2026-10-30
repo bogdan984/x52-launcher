@@ -12,8 +12,8 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
 from x52_core import (ALL_KEYS, AXIS_ROLES, CUSTOM_PREFIX, DCS_CAM, DCS_CAM_LABEL, HAT8, HAT8_NAME, HAT8_ORDER,
-                      MODIFIER_KEYS, SEQ_MAX_DELAY_MS,
-                      analog_axis, binding_text, clean_steps, find_custom, key_text, keys_text, new_custom_id,
+                      MAX_STEPS, MODIFIER_KEYS, SEQ_CYCLE_RESET_MAX_MS, SEQ_CYCLE_RESET_MIN_MS, SEQ_MAX_DELAY_MS,
+                      action_steps, analog_axis, binding_text, clean_steps, find_custom, key_text, keys_text, new_custom_id,
                       sanitize_config)
 
 SLOTS = ("single", "long", "release")
@@ -109,13 +109,22 @@ def find_slots(cfg, b, layer=0):
     return out
 
 
-def column_from_ca(ca):
+def column_from_ca(ca, cfg=None):
     """Своё действие -> поля колонки окна. special = настроено иначе (переключатель и т.п.)."""
     col = {"enabled": True, "name": ca["name"], "kind": "key", "mods": [], "key": "", "repeat": False,
            "repeat_ms": ca["repeat_ms"], "continuous": False, "seq": "", "profile": "", "special": False,
-           "cam": ca.get("cam", "left"), "seq_hold": bool(ca.get("seq_hold"))}
+           "cam": ca.get("cam", "left"), "seq_hold": bool(ca.get("seq_hold")),
+           "cycle_steps": [], "cycle_hold_ms": 100, "seq_cycle_reset": ca.get("seq_cycle_reset", True),
+           "seq_cycle_reset_ms": ca.get("seq_cycle_reset_ms", 1000),
+           "seq_cycle_profile_reset": ca.get("seq_cycle_profile_reset", True)}
     m = ca["mode"]
-    if m == "camera":
+    if m == "sequence" and ca.get("seq_cycle"):
+        # перебор по кругу: шаги — прямо в окне (сделанный из библиотечной последовательности — её копия)
+        steps = action_steps(cfg, ca) if cfg is not None else ca["steps"]
+        col["kind"] = "cycle"
+        col["cycle_steps"] = [list(st["keys"]) for st in steps]
+        col["cycle_hold_ms"] = steps[0]["duration_ms"] if steps else 100
+    elif m == "camera":
         col["kind"] = "cam"
     elif m == "profile":
         col["kind"] = "profile"
@@ -146,7 +155,10 @@ def column_from_ca(ca):
 def ca_fields(col, slot, long_on):
     trig = {"single": "short" if long_on else "press", "long": "long", "release": "release"}[slot]
     f = {"name": (col.get("name") or "").strip()[:60] or "Действие", "trigger": trig, "keys": [],
-         "steps": [], "seq": "", "seq_hold": False, "repeat_ms": int(col.get("repeat_ms") or 100),
+         "steps": [], "seq": "", "seq_hold": False, "seq_cycle": False, "repeat_ms": int(col.get("repeat_ms") or 100),
+         "seq_cycle_reset": bool(col.get("seq_cycle_reset", True)),
+         "seq_cycle_reset_ms": col.get("seq_cycle_reset_ms", 1000),
+         "seq_cycle_profile_reset": bool(col.get("seq_cycle_profile_reset", True)),
          "profile": {"kind": "cycle", "names": []}}
     if col["kind"] == "profile":
         f["mode"] = "profile"
@@ -157,6 +169,13 @@ def ca_fields(col, slot, long_on):
         f["mode"] = "sequence"
         f["seq"] = col.get("seq", "")
         f["seq_hold"] = bool(col.get("seq_hold"))
+    elif col["kind"] == "cycle":
+        f["mode"] = "sequence"
+        f["seq_cycle"] = True
+        hold = int(col.get("cycle_hold_ms") or 100)
+        # «Начало» у перебора не нужно — только порядок шагов
+        f["steps"] = [{"keys": list(k), "delay_ms": i, "duration_ms": hold}
+                      for i, k in enumerate(col.get("cycle_steps", []))]
     elif col["kind"] == "cam":
         f["mode"] = "camera"
         f["cam"] = col.get("cam") or "left"
@@ -171,6 +190,8 @@ def column_problem(col):
         return None
     if col["kind"] == "key" and not col.get("key"):
         return "выберите клавишу"
+    if col["kind"] == "cycle" and not col.get("cycle_steps"):
+        return "добавьте шаги перебора («+ шаг»)"
     if col["kind"] == "seq" and not col.get("seq"):
         return "выберите последовательность (меню «Последовательности»)"
     if col["kind"] == "profile" and not col.get("profile"):
@@ -202,7 +223,8 @@ def apply_slots(cfg, b, layer, cols):
             cfg["custom_actions"].append(ca)
         ca.update(f)
         tmp = sanitize_config(dict(cfg, custom_actions=[ca]))["custom_actions"][0]
-        for k in ("name", "keys", "mode", "trigger", "repeat_ms", "seq", "seq_hold", "profile", "steps", "cam"):
+        for k in ("name", "keys", "mode", "trigger", "repeat_ms", "seq", "seq_hold", "seq_cycle", "seq_cycle_reset",
+                  "seq_cycle_reset_ms", "seq_cycle_profile_reset", "profile", "steps", "cam"):
             ca[k] = tmp[k]
 
 
@@ -213,7 +235,9 @@ def slot_signature(cfg, b, layer=0):
 
 def ca_signature(ca):
     return json.dumps([ca["mode"], ca["keys"], ca["trigger"], ca.get("seq", ""), ca["profile"],
-                       ca.get("cam", "left"), ca["repeat_ms"], ca["steps"], bool(ca.get("seq_hold"))],
+                       ca.get("cam", "left"), ca["repeat_ms"], ca["steps"], bool(ca.get("seq_hold")),
+                       bool(ca.get("seq_cycle")), ca.get("seq_cycle_reset", True), ca.get("seq_cycle_reset_ms", 1000),
+                       ca.get("seq_cycle_profile_reset", True)],
                       sort_keys=True)
 
 
@@ -246,6 +270,10 @@ def mapped_rows(cfg, device, others=()):
                 seq = ca.get("seq") or "(свои шаги)"
                 if ca.get("seq_hold"):
                     rep = "пока держите"
+                elif ca.get("seq_cycle"):
+                    rep = "по кругу"
+                    if not ca.get("seq"):
+                        seq = " → ".join(keys_text(st["keys"]) for st in ca["steps"])
             elif m == "camera":
                 key = "Обзор DCS: " + DCS_CAM_LABEL.get(ca.get("cam"), "?")
             else:
@@ -508,6 +536,39 @@ class ActionColumn(tk.Frame):
         self.seq_hold = tk.BooleanVar()
         ttk.Checkbutton(gs, text="удержание (шаги идут, пока держите кнопку)", variable=self.seq_hold).pack(
             anchor="w", padx=2, pady=(0, 4))
+        ttk.Radiobutton(b, text="Перебор по кругу (нажатие — следующий шаг)", variable=self.kind, value="cycle",
+                        command=self._state).pack(anchor="w")
+        gy = ttk.LabelFrame(b, text="")
+        gy.pack(fill="x", pady=(0, 6))
+        self.cycle_steps = []
+        self.cyc_lb = tk.Listbox(gy, height=3, width=30, exportselection=False)
+        self.cyc_lb.pack(anchor="w", padx=4, pady=(4, 2))
+        cb = ttk.Frame(gy)
+        cb.pack(anchor="w", padx=4)
+        ttk.Button(cb, text="+ шаг", width=6, command=self._cyc_add).pack(side="left")
+        ttk.Button(cb, text="Изменить", width=9, command=self._cyc_edit).pack(side="left", padx=2)
+        ttk.Button(cb, text="−", width=3, command=self._cyc_del).pack(side="left")
+        ttk.Button(cb, text="↑", width=3, command=lambda: self._cyc_move(-1)).pack(side="left", padx=(2, 0))
+        ttk.Button(cb, text="↓", width=3, command=lambda: self._cyc_move(1)).pack(side="left")
+        hr = ttk.Frame(gy)
+        hr.pack(anchor="w", padx=4, pady=(4, 0))
+        ttk.Label(hr, text="Держать клавишу, мс:").pack(side="left")
+        self.cyc_hold = tk.StringVar(value="100")
+        ttk.Spinbox(hr, from_=10, to=10000, increment=10, width=6, textvariable=self.cyc_hold).pack(
+            side="left", padx=(4, 0))
+        self.cyc_reset_on = tk.BooleanVar(value=True)
+        rr = ttk.Frame(gy)
+        rr.pack(anchor="w", padx=2, pady=(2, 0))
+        ttk.Checkbutton(rr, text="к 1-му шагу: держать >", variable=self.cyc_reset_on,
+                        command=self._state).pack(side="left")
+        self.cyc_reset_ms = tk.StringVar(value="1000")
+        self.cyc_reset_spin = ttk.Spinbox(rr, from_=SEQ_CYCLE_RESET_MIN_MS, to=SEQ_CYCLE_RESET_MAX_MS,
+                                          increment=100, width=6, textvariable=self.cyc_reset_ms)
+        self.cyc_reset_spin.pack(side="left", padx=(4, 0))
+        ttk.Label(rr, text="мс").pack(side="left", padx=(4, 0))
+        self.cyc_prof = tk.BooleanVar(value=True)
+        ttk.Checkbutton(gy, text="с 1-го шага при смене профиля", variable=self.cyc_prof).pack(
+            anchor="w", padx=2, pady=(0, 4))
         ttk.Radiobutton(b, text="Смена профиля", variable=self.kind, value="profile",
                         command=self._state).pack(anchor="w")
         gp = ttk.LabelFrame(b, text="")
@@ -541,6 +602,53 @@ class ActionColumn(tk.Frame):
             if rest:
                 self.key.set(key_text(rest[0]))
 
+    def _cyc_refresh(self, sel=None):
+        st = self.cyc_lb.cget("state")
+        self.cyc_lb.configure(state="normal")       # в выключенный Listbox Tk строки не вписывает
+        self.cyc_lb.delete(0, "end")
+        for i, k in enumerate(self.cycle_steps):
+            self.cyc_lb.insert("end", "%d. %s" % (i + 1, keys_text(k)))
+        self.cyc_lb.configure(state=st)
+        if sel is not None and 0 <= sel < len(self.cycle_steps):
+            self.cyc_lb.selection_set(sel)
+            self.cyc_lb.see(sel)
+
+    def _cyc_sel(self):
+        s = self.cyc_lb.curselection()
+        return s[0] if s else None
+
+    def _cyc_add(self):
+        r = self.pick_key()
+        if r and len(self.cycle_steps) < MAX_STEPS:
+            i = self._cyc_sel()
+            i = len(self.cycle_steps) if i is None else i + 1      # после выбранного, иначе в конец
+            self.cycle_steps.insert(i, list(r))
+            self.kind.set("cycle")
+            self._cyc_refresh(i)
+
+    def _cyc_edit(self):
+        i = self._cyc_sel()
+        if i is None:
+            return
+        r = self.pick_key()
+        if r:
+            self.cycle_steps[i] = list(r)
+            self._cyc_refresh(i)
+
+    def _cyc_del(self):
+        i = self._cyc_sel()
+        if i is not None:
+            del self.cycle_steps[i]
+            self._cyc_refresh(min(i, len(self.cycle_steps) - 1))
+
+    def _cyc_move(self, d):
+        i = self._cyc_sel()
+        if i is None or not 0 <= i + d < len(self.cycle_steps):
+            return
+        st = self.cycle_steps
+        st[i], st[i + d] = st[i + d], st[i]
+        self._cyc_refresh(i + d)
+
     def _state(self):
         st = "normal" if self.en.get() and not self.special else "disabled"
 
@@ -555,6 +663,8 @@ class ActionColumn(tk.Frame):
                     pass
                 walk(ch)
         walk(self.body)
+        if st == "normal" and not self.cyc_reset_on.get():
+            self.cyc_reset_spin.configure(state="disabled")
         self.special_lbl.configure(state="normal")
 
     def set(self, col):
@@ -570,6 +680,12 @@ class ActionColumn(tk.Frame):
         self.cont.set(col.get("continuous", False))
         self.seq.set(col.get("seq", ""))
         self.seq_hold.set(col.get("seq_hold", False))
+        self.cycle_steps = [list(k) for k in col.get("cycle_steps", [])]
+        self._cyc_refresh()
+        self.cyc_hold.set(str(col.get("cycle_hold_ms", 100)))
+        self.cyc_reset_on.set(col.get("seq_cycle_reset", True))
+        self.cyc_reset_ms.set(str(col.get("seq_cycle_reset_ms", 1000)))
+        self.cyc_prof.set(col.get("seq_cycle_profile_reset", True))
         self.prof.set(col.get("profile", ""))
         self.cam.set(DCS_CAM_LABEL.get(col.get("cam") or "left", ""))
         self.special_lbl.configure(text="Это действие настроено особо (переключатель / профили по кругу / свои "
@@ -583,11 +699,22 @@ class ActionColumn(tk.Frame):
             rep_ms = max(30, min(2000, int(float(self.rep_ms.get()))))
         except ValueError:
             rep_ms = 100
+        try:
+            cyc_ms = max(SEQ_CYCLE_RESET_MIN_MS, min(SEQ_CYCLE_RESET_MAX_MS, int(float(self.cyc_reset_ms.get()))))
+        except ValueError:
+            cyc_ms = 1000
+        try:
+            hold = max(10, min(10000, int(float(self.cyc_hold.get()))))
+        except ValueError:
+            hold = 100
         return {"enabled": bool(self.en.get()), "special": self.special, "name": self.name.get(),
                 "kind": self.kind.get(), "mods": [k for k, v in self.mods.items() if v.get()],
                 "key": PLAIN_KEYS[names.index(kt)] if kt in names else "", "repeat": bool(self.rep.get()),
                 "repeat_ms": rep_ms, "continuous": bool(self.cont.get()), "seq": self.seq.get(),
-                "seq_hold": bool(self.seq_hold.get()), "profile": self.prof.get(),
+                "seq_hold": bool(self.seq_hold.get()), "cycle_steps": [list(k) for k in self.cycle_steps],
+                "cycle_hold_ms": hold, "seq_cycle_reset": bool(self.cyc_reset_on.get()),
+                "seq_cycle_reset_ms": cyc_ms, "seq_cycle_profile_reset": bool(self.cyc_prof.get()),
+                "profile": self.prof.get(),
                 "cam": next((k for k, t, _p in DCS_CAM if t == self.cam.get()), "left")}
 
 
@@ -609,11 +736,13 @@ class RsActionDialog(tk.Toplevel):
             c.grid(row=0, column=i, sticky="n", padx=5)
             c.set(cols[s])
             self.cols[s] = c
-        ttk.Label(self, foreground="#555", wraplength=600, justify="left", text=(
+        ttk.Label(self, foreground="#555", wraplength=1000, justify="left", text=(
             "Если включено долгое нажатие, обычное срабатывает, только если отпустить кнопку раньше порога "
             "(«Режимы и автопрофиль» → «Долгое нажатие»). «Непрерывно» — клавиша держится, пока держите "
             "кнопку; без него — одно короткое нажатие. «Удержание» у последовательности — шаги идут, пока держите "
-            "кнопку (или ось в заданном диапазоне); отпустили — оставшиеся шаги не выполняются.")).pack(anchor="w", padx=10)
+            "кнопку (или ось в заданном диапазоне); отпустили — оставшиеся шаги не выполняются. «Перебор по кругу» — "
+            "каждое нажатие кнопки нажимает клавишу следующего шага (после последнего — снова первый); «+ шаг» — "
+            "нажмите клавишу на клавиатуре.")).pack(anchor="w", padx=10)
         self.prof_vars = {}
         if share:                      # (все профили, текущий, где уже так же)
             names, cur, same = share
@@ -1530,7 +1659,7 @@ class RsView(ttk.Frame):
         layer = self.cur_layer()
         same = app.rs_profiles_same(b, layer)
         have = find_slots(app.cfg, b, layer)
-        start = {s: (column_from_ca(have[s]) if s in have else
+        start = {s: (column_from_ca(have[s], app.cfg) if s in have else
                      {"enabled": False, "name": "", "kind": "key", "mods": [], "key": "", "repeat": False,
                       "repeat_ms": 100, "continuous": False, "seq": "", "profile": "", "special": False,
                       "cam": "left"})

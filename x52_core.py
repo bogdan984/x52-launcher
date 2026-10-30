@@ -327,6 +327,8 @@ TAP_MS = 60            # длительность «тапа» клавиши д
 TAP_GAP_MS = 30        # пауза между тапами из очереди (игра должна увидеть отпускание модификаторов)
 MAX_STEPS = 50
 SEQ_MAX_DELAY_MS = 300000   # шаг последовательности может начаться до 5 мин от нажатия
+SEQ_CYCLE_RESET_MAX_MS = 10000   # «по кругу»: удержание для сброса к первому шагу
+SEQ_CYCLE_RESET_MIN_MS = 100
 MAX_CUSTOM = 200
 _BAD_NAME = re.compile('[<>:"/\\\\|?*\\x00-\\x1f]')   # символы, запрещённые в именах файлов Windows
 
@@ -401,6 +403,11 @@ def sequence_length_ms(steps):
     return max([st["delay_ms"] + st["duration_ms"] for st in steps] or [0])
 
 
+def cycle_key(ca, steps):
+    """«По кругу»: счётчик шага общий у одинаковых действий (имя + клавиши шагов), в т.ч. в разных профилях."""
+    return (ca["name"], tuple(tuple(st["keys"]) for st in steps))
+
+
 def custom_out_text(ca, layers_enabled=True):
     if ca["mode"] == "profile":
         pt = ca["profile"]
@@ -409,6 +416,8 @@ def custom_out_text(ca, layers_enabled=True):
              "next": "Следующий профиль", "prev": "Предыдущий профиль"}[pt["kind"]]
     elif ca["mode"] == "camera":
         t = "Обзор DCS: " + DCS_CAM_LABEL.get(ca.get("cam"), "?")
+    elif ca["mode"] == "sequence" and ca.get("seq_cycle") and not ca.get("seq"):
+        t = "Перебор по кругу: " + " → ".join(keys_text(st["keys"]) for st in ca["steps"])
     elif ca["mode"] == "sequence" and ca.get("seq"):
         t = "Последовательность «%s»" % ca["seq"]
     elif ca["mode"] == "sequence":
@@ -426,6 +435,11 @@ def custom_out_text(ca, layers_enabled=True):
             t += " · одно нажатие"
     if ca["mode"] == "sequence" and ca.get("seq_hold"):
         t += " · пока держите"
+    if ca["mode"] == "sequence" and ca.get("seq_cycle"):
+        if ca.get("seq"):
+            t += " · по кругу"
+        if ca.get("seq_cycle_reset"):
+            t += " · к 1-му шагу: держать %d мс" % ca["seq_cycle_reset_ms"]
     if ca["trigger"] != "press":
         t += " · " + {"short": "короткое", "long": "долгое", "release": "отпускание"}[ca["trigger"]]
     if layers_enabled and ca["layer"]:
@@ -716,10 +730,18 @@ def sanitize_config(src):
                 n = clean_profile_name(n)
                 if n not in pnames:
                     pnames.append(n)
+        # «к 1-му шагу»: галочка + время; ранняя сборка 5.5.30 хранила «без сброса» как 0 мс
+        cyc_ms = int(_num(x.get("seq_cycle_reset_ms"), 1000, 0, SEQ_CYCLE_RESET_MAX_MS))
+        cyc_reset = bool(x.get("seq_cycle_reset", True)) and cyc_ms > 0
+        cyc_ms = max(SEQ_CYCLE_RESET_MIN_MS, cyc_ms) if cyc_ms else 1000
         out["custom_actions"].append({
             "repeat_ms": int(_num(x.get("repeat_ms"), 100, 30, 2000)),
             "seq": x["seq"].strip()[:60] if isinstance(x.get("seq"), str) and x["seq"].strip() else "",
-            "seq_hold": bool(x.get("seq_hold", False)),
+            "seq_hold": bool(x.get("seq_hold", False)) and not x.get("seq_cycle"),
+            "seq_cycle": bool(x.get("seq_cycle", False)),
+            "seq_cycle_reset": cyc_reset,
+            "seq_cycle_reset_ms": cyc_ms,
+            "seq_cycle_profile_reset": bool(x.get("seq_cycle_profile_reset", True)),
             "profile": {"kind": pt.get("kind") if pt.get("kind") in PROFILE_KINDS else "cycle", "names": pnames},
             "id": cid, "name": name, "keys": ks,
             "mode": x.get("mode") if x.get("mode") in CUSTOM_MODES else "hold",
@@ -1116,6 +1138,8 @@ class ZoomAxis(object):
 class Mapper(object):
     def __init__(self):
         self.wheel_last = 0          # последнее положение колеса (1..3); переживает смену профиля
+        self.cyc_idx = {}            # cycle_key -> следующий шаг «по кругу»; переживает смену профиля
+        self.cyc_prof = None         # профиль, в котором считали шаги «по кругу»
         self.wheel_seen = False      # колесо видели живьём с момента открытия джойстика
         self.reset()
 
@@ -1134,6 +1158,8 @@ class Mapper(object):
         self.long_fired = set()      # aid, у которых долгое нажатие уже сработало
         self.tap_until = {}          # aid -> до какого времени держать «тап»
         self.seq_start = {}          # aid -> время старта идущей последовательности
+        self.cyc_cur = {}            # aid -> (клавиши, до какого времени держать) — шаг «по кругу»
+        self.cyc_reset_done = set()  # aid, у которых это нажатие уже не шаг (был сброс / нажато до смены профиля)
         self.layer = 0               # текущий слой (0 — слои выключены / неизвестен)
         self.layer_known = True      # распознано ли положение колеса
         self.rep_start = {}          # aid -> начало автоповтора
@@ -1201,6 +1227,13 @@ class Mapper(object):
         else:
             self.layer = 0
         long_s = cfg["long_press_ms"] / 1000.0
+        prof = cfg.get("profile_name")
+        if prof != self.cyc_prof:
+            if self.cyc_prof is not None:     # сменили профиль — «по кругу» с галочкой сброса снова с 1-го шага
+                for ca in cfg["custom_actions"]:
+                    if ca["mode"] == "sequence" and ca["seq_cycle"] and ca["seq_cycle_profile_reset"]:
+                        self.cyc_idx.pop(cycle_key(ca, action_steps(cfg, ca)), None)
+            self.cyc_prof = prof
         if self.fresh:
             # после смены профиля зажатые кнопки — «старые»: без нажатия/короткого/долгого,
             # но отпускание сработает (схема «нажал — профиль 2, отпустил — профиль 1»)
@@ -1212,6 +1245,7 @@ class Mapper(object):
                     self.press_t[aid] = now
                     self.long_fired.add(aid)
                     self.suppressed.add(aid)
+                    self.cyc_reset_done.add(aid)
         keys = set()
         live = set()
         raw_now = set()
@@ -1284,6 +1318,35 @@ class Mapper(object):
                     self.tap_until[aid] = now + TAP_MS / 1000.0
                     self.tap_queue.append(list(ca["keys"]))
                 on = now < self.tap_until.get(aid, 0.0)
+            elif mode == "sequence" and ca["seq_cycle"]:
+                # «по кругу»: нажатие — следующий шаг (после последнего снова первый);
+                # удержание дольше seq_cycle_reset_ms — к первому шагу, без нажатия клавиш
+                steps = action_steps(cfg, ca)
+                ck = cycle_key(ca, steps)
+                rs = ca["seq_cycle_reset_ms"] / 1000.0 if ca["seq_cycle_reset"] else 0.0
+                fire = False
+                if not rs:
+                    fire = raw and not was                # без сброса — шаг сразу при нажатии
+                elif raw and aid not in self.cyc_reset_done and now - self.press_t.get(aid, now) >= rs:
+                    self.cyc_reset_done.add(aid)
+                    self.cyc_idx.pop(ck, None)
+                    self.cyc_cur.pop(aid, None)
+                    self.tap_until[aid] = now + 0.3       # подсветка «сброшено» в интерфейсе
+                elif was and not raw:
+                    fire = aid not in self.cyc_reset_done  # со сбросом — шаг при отпускании
+                if not raw:
+                    self.cyc_reset_done.discard(aid)
+                if fire and steps:
+                    i = self.cyc_idx.get(ck, 0) % len(steps)
+                    self.cyc_idx[ck] = (i + 1) % len(steps)
+                    self.cyc_cur[aid] = (list(steps[i]["keys"]), now + steps[i]["duration_ms"] / 1000.0)
+                cur = self.cyc_cur.get(aid)
+                if cur and now < cur[1]:
+                    keys.update(cur[0])
+                    on = True
+                else:
+                    self.cyc_cur.pop(aid, None)
+                    on = now < self.tap_until.get(aid, 0.0)
             elif mode == "sequence":
                 steps = action_steps(cfg, ca)
                 if event and aid not in self.seq_start:
@@ -1326,10 +1389,11 @@ class Mapper(object):
             keys.update(self.tap_cur[0])
         self.custom_prev = raw_now
         self.toggled &= live
-        for d in (self.press_t, self.tap_until, self.seq_start, self.rep_start):
+        for d in (self.press_t, self.tap_until, self.seq_start, self.rep_start, self.cyc_cur):
             for k in [k for k in d if k not in live]:
                 del d[k]
         self.long_fired &= live
+        self.cyc_reset_done &= live
         self.suppressed &= live
         return keys
 

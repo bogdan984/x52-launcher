@@ -73,7 +73,7 @@ except ImportError:
 from x52_core import (  # noqa: E402
     ACTIONS, ACTION_LABEL, ACTION_PAD, ACTION_KEYS, ALL_KEYS, AXIS_ROLES,
     CAL_ROWS, CATEGORIES, EMPTY_OUT, HEAD_SCALES, INTERNAL_ACTIONS, IS_WIN,
-    CUSTOM_PREFIX, SEQ_MAX_DELAY_MS, action_label, action_pair, all_action_ids,
+    CUSTOM_PREFIX, SEQ_CYCLE_RESET_MAX_MS, SEQ_CYCLE_RESET_MIN_MS, SEQ_MAX_DELAY_MS, action_label, action_pair, all_action_ids,
     action_steps, clean_profile_name, find_custom, new_custom_id, new_profile_config,
     KeySender, Mapper, OutputLimiter, STICK_PARAMS, STICK_PRESETS, TOKEN_TEXT, YAW_PARAMS, binding_text,
     clamp, compose_camera, default_config, find_opentrack, head_to_stick, key_from_tk_event, key_text,
@@ -83,7 +83,7 @@ from x52_core import (  # noqa: E402
 import x52_ministick  # noqa: E402
 
 APP_NAME = "X52 Launcher"
-APP_VERSION = "5.5.29"
+APP_VERSION = "5.5.31"
 # Собранный exe (PyInstaller): программа в Program Files (только чтение), настройки — в %APPDATA%.
 FROZEN = bool(getattr(sys, "frozen", False))
 APP_DIR = os.path.dirname(sys.executable if FROZEN else os.path.abspath(__file__))
@@ -1800,7 +1800,33 @@ class CustomActionDialog(tk.Toplevel):
             row=3, column=0, columnspan=4, sticky="w", padx=6)
         self.seq_hold = tk.BooleanVar(value=bool(ca.get("seq_hold")))
         ttk.Checkbutton(self.seq_frame, text="Удержание: шаги идут, пока держите кнопку (отпустили — остановка)",
-                        variable=self.seq_hold).grid(row=5, column=0, columnspan=6, sticky="w", padx=6)
+                        variable=self.seq_hold, command=lambda: self.seq_hold.get() and self.seq_cycle.set(False)
+                        ).grid(row=5, column=0, columnspan=6, sticky="w", padx=6)
+        self.seq_cycle = tk.BooleanVar(value=bool(ca.get("seq_cycle")))
+        ttk.Checkbutton(self.seq_frame, text="По кругу: каждое нажатие — следующий шаг (после последнего — снова "
+                        "первый)", variable=self.seq_cycle,
+                        command=lambda: self.seq_cycle.get() and self.seq_hold.set(False)
+                        ).grid(row=6, column=0, columnspan=6, sticky="w", padx=6)
+        cf = ttk.Frame(self.seq_frame)
+        cf.grid(row=7, column=0, columnspan=6, sticky="w", padx=24)
+        self.cyc_reset_on = tk.BooleanVar(value=bool(ca.get("seq_cycle_reset", True)))
+        ttk.Checkbutton(cf, text="Вернуться к 1-му шагу, если держать кнопку дольше", variable=self.cyc_reset_on,
+                        command=self._cyc_state).pack(side="left")
+        self.cyc_reset_var = tk.StringVar(value=str(ca.get("seq_cycle_reset_ms", 1000)))
+        self.cyc_reset_spin = ttk.Spinbox(cf, from_=SEQ_CYCLE_RESET_MIN_MS, to=SEQ_CYCLE_RESET_MAX_MS,
+                                          increment=100, width=7, textvariable=self.cyc_reset_var)
+        self.cyc_reset_spin.pack(side="left", padx=6)
+        ttk.Label(cf, text="мс").pack(side="left")
+        self._cyc_state()
+        self.cyc_prof = tk.BooleanVar(value=bool(ca.get("seq_cycle_profile_reset", True)))
+        ttk.Checkbutton(self.seq_frame, text="При смене профиля начинать снова с 1-го шага",
+                        variable=self.cyc_prof).grid(row=8, column=0, columnspan=6, sticky="w", padx=24)
+        ttk.Label(self.seq_frame, foreground="#555", wraplength=520, justify="left", text=(
+            "По кругу: «Начало» шага задаёт только порядок, «Держать» — сколько держать клавишу шага. "
+            "С галочкой «вернуться к 1-му шагу» шаг срабатывает при отпускании кнопки (если держали меньше этого "
+            "времени), без неё — сразу при нажатии. "
+            "«Срабатывание» (нажатие / короткое / долгое / отпускание) здесь не используется."
+            )).grid(row=9, column=0, columnspan=6, sticky="w", padx=24, pady=(0, 6))
         bf = ttk.Frame(self.seq_frame)
         bf.grid(row=4, column=0, columnspan=6, sticky="w", padx=6, pady=6)
         ttk.Button(bf, text="Добавить шаг", command=self._add_step).pack(side="left")
@@ -1856,6 +1882,9 @@ class CustomActionDialog(tk.Toplevel):
             self.pnames[i], self.pnames[j] = self.pnames[j], self.pnames[i]
             self._refresh()
             self.plb.selection_set(j)
+
+    def _cyc_state(self):
+        self.cyc_reset_spin.configure(state="normal" if self.cyc_reset_on.get() else "disabled")
 
     def _refresh(self):
         self.key_lbl.configure(text=keys_text(self.keys) if self.keys else "— не выбрана —")
@@ -1968,9 +1997,17 @@ class CustomActionDialog(tk.Toplevel):
             rep_ms = int(float(self.rep_var.get()))
         except ValueError:
             rep_ms = 100
+        try:
+            cyc_ms = int(float(self.cyc_reset_var.get()))
+        except ValueError:
+            cyc_ms = 1000
         self.result = {"name": n[:60], "keys": list(self.keys), "mode": mode, "trigger": self.trig.get(),
                        "layer": int(self.layer.get()), "steps": [dict(st) for st in self.steps],
                        "seq_hold": bool(self.seq_hold.get()), "repeat_ms": max(30, min(2000, rep_ms)),
+                       "seq_cycle": bool(self.seq_cycle.get()),
+                       "seq_cycle_reset": bool(self.cyc_reset_on.get()),
+                       "seq_cycle_reset_ms": max(SEQ_CYCLE_RESET_MIN_MS, min(SEQ_CYCLE_RESET_MAX_MS, cyc_ms)),
+                       "seq_cycle_profile_reset": bool(self.cyc_prof.get()),
                        "profile": {"kind": self.pkind.get(), "names": list(self.pnames)},
                        "cam": next((k for k, t, _p in DCS_CAM if t == self.cam_combo.get()), "left")}
         self.destroy()
@@ -3477,7 +3514,8 @@ class App(tk.Tk):
             if not (col.get("enabled") and col.get("special")) or slot not in src:
                 continue
             fields = {k: json.loads(json.dumps(src[slot][k])) for k in
-                      ("name", "keys", "mode", "trigger", "repeat_ms", "seq", "seq_hold", "profile", "steps", "cam")
+                      ("name", "keys", "mode", "trigger", "repeat_ms", "seq", "seq_hold", "seq_cycle",
+                       "seq_cycle_reset", "seq_cycle_reset_ms", "seq_cycle_profile_reset", "profile", "steps", "cam")
                       if k in src[slot]}
             ca = dst.get(slot)
             if ca is None:
@@ -5024,11 +5062,15 @@ class App(tk.Tk):
               "mode": data.get("mode", "hold"), "trigger": data.get("trigger", "press"),
               "layer": int(data.get("layer", 0)), "steps": [dict(st) for st in data.get("steps", [])],
               "repeat_ms": data.get("repeat_ms", 100), "profile": data.get("profile"),
-              "cam": data.get("cam"), "seq_hold": bool(data.get("seq_hold")), "bindings": [None, None]}
+              "cam": data.get("cam"), "seq_hold": bool(data.get("seq_hold")),
+              "seq_cycle": bool(data.get("seq_cycle")), "seq_cycle_reset": data.get("seq_cycle_reset", True),
+              "seq_cycle_reset_ms": data.get("seq_cycle_reset_ms", 1000),
+              "seq_cycle_profile_reset": data.get("seq_cycle_profile_reset", True), "bindings": [None, None]}
         tmp = sanitize_config(dict(self.cfg, custom_actions=[ca]))["custom_actions"][0]
         ca.update(steps=tmp["steps"], keys=tmp["keys"], mode=tmp["mode"], trigger=tmp["trigger"],
                   layer=tmp["layer"], repeat_ms=tmp["repeat_ms"], profile=tmp["profile"], cam=tmp["cam"],
-                  seq_hold=tmp["seq_hold"])
+                  seq_hold=tmp["seq_hold"], seq_cycle=tmp["seq_cycle"], seq_cycle_reset=tmp["seq_cycle_reset"],
+                  seq_cycle_reset_ms=tmp["seq_cycle_reset_ms"], seq_cycle_profile_reset=tmp["seq_cycle_profile_reset"])
         self.cfg["custom_actions"].append(ca)
         self.refresh_tree()
         self.mark_dirty()
@@ -5054,7 +5096,9 @@ class App(tk.Tk):
             tmp = sanitize_config(dict(self.cfg, custom_actions=[dict(ca, **data)]))["custom_actions"][0]
             ca.update(name=tmp["name"], keys=tmp["keys"], mode=tmp["mode"], trigger=tmp["trigger"],
                       layer=tmp["layer"], steps=tmp["steps"], repeat_ms=tmp["repeat_ms"], profile=tmp["profile"],
-                      cam=tmp["cam"], seq_hold=tmp["seq_hold"])
+                      cam=tmp["cam"], seq_hold=tmp["seq_hold"], seq_cycle=tmp["seq_cycle"],
+                      seq_cycle_reset=tmp["seq_cycle_reset"], seq_cycle_reset_ms=tmp["seq_cycle_reset_ms"],
+                      seq_cycle_profile_reset=tmp["seq_cycle_profile_reset"])
             self.refresh_tree()
             self.mark_dirty()
 
