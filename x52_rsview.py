@@ -1179,43 +1179,55 @@ class SubprofileManager(tk.Toplevel):
         self.icon.bind("<<ComboboxSelected>>", lambda e: self._apply())
 
         # --- кнопки подпрофиля (как шаги последовательности)
-        bx = ttk.LabelFrame(right, text="Кнопки X52 в подпрофиле (остальные работают как в профиле)")
+        bx = ttk.LabelFrame(right, text="Кнопки и оси X52 в подпрофиле (остальные работают как в профиле)")
         bx.pack(fill="both", expand=True, pady=(6, 0))
         cols = ("input", "name", "key", "mode")
         self.tv = ttk.Treeview(bx, columns=cols, show="headings", height=7, selectmode="browse")
-        for c, t, w in zip(cols, ("Кнопка X52", "Название", "Клавиша / действие", "Режим"), (230, 110, 170, 100)):
+        for c, t, w in zip(cols, ("Кнопка / ось X52", "Название", "Клавиша / действие", "Режим"), (230, 110, 170, 100)):
             self.tv.heading(c, text=t)
             self.tv.column(c, width=w)
         self.tv.pack(fill="both", expand=True, padx=6, pady=6)
         self.tv.bind("<<TreeviewSelect>>", lambda e: self._load_btn())
         self._rows = {}
-        ed = ttk.LabelFrame(bx, text="Кнопка")
+        ed = ttk.LabelFrame(bx, text="Кнопка или направление оси")
         ed.pack(fill="x", padx=6, pady=(0, 6))
-        ttk.Label(ed, text="Кнопка X52:").grid(row=0, column=0, sticky="w", padx=4)
+        ttk.Label(ed, text="Кнопка / ось X52:").grid(row=0, column=0, sticky="w", padx=4)
         self.inputs = self._all_inputs()
         self.inp = ttk.Combobox(ed, state="readonly", width=40, height=20, values=[t for t, _b in self.inputs])
         self.inp.grid(row=0, column=1, columnspan=4, sticky="w")
+        self.inp.bind("<<ComboboxSelected>>", lambda e: self._input_changed())
         self.press_btn = ttk.Button(ed, text="Нажать на X52…", command=self._wait_press)
         self.press_btn.grid(row=0, column=5, sticky="w", padx=4)
         self.now_lbl = ttk.Label(ed, text="", foreground="#1d4ed8")
-        self.now_lbl.grid(row=7, column=0, columnspan=6, sticky="w", padx=4)
-        ttk.Label(ed, text="Название:").grid(row=1, column=0, sticky="w", padx=4)
+        self.now_lbl.grid(row=8, column=0, columnspan=6, sticky="w", padx=4)
+        # порог оси — как кнопка «− : ≤ …» / «+ : ≥ …» на плитке оси (общий с вкладкой «Оси»)
+        self.ax_row = ttk.Frame(ed)
+        self.ax_row.grid(row=1, column=0, columnspan=6, sticky="w", padx=4)
+        ttk.Label(self.ax_row, text="Порог оси:").pack(side="left")
+        self.thr = tk.StringVar(value="0.50")
+        ttk.Spinbox(self.ax_row, from_=-0.95, to=0.95, increment=0.05, width=6, format="%.2f",
+                    textvariable=self.thr).pack(side="left", padx=4)
+        self.thr_lbl = ttk.Label(self.ax_row, text="", foreground="#555")
+        self.thr_lbl.pack(side="left")
+        self.ax_warn = ttk.Label(ed, text="", foreground="#b45309")
+        self.ax_warn.grid(row=9, column=0, columnspan=6, sticky="w", padx=4)
+        ttk.Label(ed, text="Название:").grid(row=2, column=0, sticky="w", padx=4)
         self.b_name = tk.StringVar()
-        ttk.Entry(ed, textvariable=self.b_name, width=24).grid(row=1, column=1, columnspan=3, sticky="w")
-        ttk.Label(ed, text="Модификатор:").grid(row=2, column=0, sticky="w", padx=4)
+        ttk.Entry(ed, textvariable=self.b_name, width=24).grid(row=2, column=1, columnspan=3, sticky="w")
+        ttk.Label(ed, text="Модификатор:").grid(row=3, column=0, sticky="w", padx=4)
         mf = ttk.Frame(ed)
-        mf.grid(row=2, column=1, columnspan=5, sticky="w")
+        mf.grid(row=3, column=1, columnspan=5, sticky="w")
         self.mods = {}
         for k in MODIFIER_KEYS:
             v = tk.BooleanVar()
             ttk.Checkbutton(mf, text=MOD_LABEL[k], variable=v).pack(side="left")
             self.mods[k] = v
-        ttk.Label(ed, text="Клавиша:").grid(row=3, column=0, sticky="w", padx=4)
+        ttk.Label(ed, text="Клавиша:").grid(row=4, column=0, sticky="w", padx=4)
         self.key = ttk.Combobox(ed, state="readonly", width=16, values=[key_text(k) for k in PLAIN_KEYS])
-        self.key.grid(row=3, column=1, sticky="w")
-        ttk.Button(ed, text="…", width=3, command=self._capture).grid(row=3, column=2, sticky="w")
+        self.key.grid(row=4, column=1, sticky="w")
+        ttk.Button(ed, text="…", width=3, command=self._capture).grid(row=4, column=2, sticky="w")
         rf = ttk.Frame(ed)
-        rf.grid(row=4, column=0, columnspan=6, sticky="w", padx=2, pady=(2, 0))
+        rf.grid(row=5, column=0, columnspan=6, sticky="w", padx=2, pady=(2, 0))
         self.rep = tk.BooleanVar()
         ttk.Checkbutton(rf, text="Повтор, мс", variable=self.rep).pack(side="left")
         self.rep_ms = tk.StringVar(value="100")
@@ -1227,9 +1239,9 @@ class SubprofileManager(tk.Toplevel):
             side="left", padx=(4, 0))
         ttk.Label(rf, text="мс").pack(side="left", padx=(4, 0))
         ttk.Label(ed, foreground="#555", text="Без галочек — одно нажатие клавиши.").grid(
-            row=5, column=0, columnspan=6, sticky="w", padx=4)
+            row=6, column=0, columnspan=6, sticky="w", padx=4)
         be = ttk.Frame(ed)
-        be.grid(row=6, column=0, columnspan=6, sticky="w", padx=4, pady=6)
+        be.grid(row=7, column=0, columnspan=6, sticky="w", padx=4, pady=6)
         ttk.Button(be, text="Добавить", command=self.add_btn).pack(side="left")
         ttk.Button(be, text="Сохранить изменения", command=self.update_btn).pack(side="left", padx=4)
         ttk.Button(be, text="Удалить", command=self.delete_btn).pack(side="left")
@@ -1238,7 +1250,9 @@ class SubprofileManager(tk.Toplevel):
         ttk.Button(self, text="Закрыть", command=self.destroy).pack(side="bottom", anchor="e", padx=6, pady=6)
         self._press_job = None
         self._live_job = None
+        self._axes0 = None                      # положение осей при открытии — для строки «Сейчас…»
         self.bind("<Destroy>", lambda e: e.widget is self and self._stop_press())
+        self._input_changed()
         self._live()
         self._refresh(0)
         self.grab_set()
@@ -1360,7 +1374,10 @@ class SubprofileManager(tk.Toplevel):
         return getattr(getattr(self.app, "worker", None), "state", None) or {}
 
     def _input_text(self, b):
-        """«Кнопка 3 — Fire A», плюс своё название с плитки, если задано."""
+        """«Кнопка 3 — Fire A», плюс своё название с плитки, если задано; ось — с порогом."""
+        if b["type"] == "axis":
+            t = axis_thr(self.cfg, b["index"], b["dir"])
+            return "%s (%s %+.2f)" % (input_name(self.cfg, b), "≥" if b["dir"] == "+" else "≤", t)
         if b["type"] != "button":
             return input_name(self.cfg, b)
         t = binding_text(b)
@@ -1371,22 +1388,66 @@ class SubprofileManager(tk.Toplevel):
     def _all_inputs(self):
         st = self._state()
         nb, nh = len(st.get("buttons") or ()) or 32, len(st.get("hats") or ()) or 1
+        na = len(st.get("axes") or ()) or 8
         out = [(self._input_text(btn_binding(i)), btn_binding(i)) for i in range(nb)]
         for h in range(nh):
             for d in HAT8:
                 out.append(("Хатка %d %s %s" % (h + 1, ARROW8[d], HAT8_NAME[d]), hat_binding(h, d)))
+        for i in range(na):
+            for d in ("-", "+"):
+                b = axis_binding(i, d, axis_thr(self.cfg, i, d))
+                out.append((self._input_text(b), b))
         return out
+
+    def _reload_inputs(self):
+        """Пороги осей поменялись — обновить подписи в списке, не теряя выбор."""
+        b = self._sel_input()
+        self.inputs = self._all_inputs()
+        self.inp.configure(values=[t for t, _b in self.inputs])
+        if b is not None:
+            self._set_input(b)
 
     def _sel_input(self):
         names = [t for t, _b in self.inputs]
         t = self.inp.get()
-        return self.inputs[names.index(t)][1] if t in names else None
+        b = self.inputs[names.index(t)][1] if t in names else None
+        if b is not None and b["type"] == "axis":   # порог — текущий (мог поменяться на вкладке «Оси»)
+            b = axis_binding(b["index"], b["dir"], axis_thr(self.cfg, b["index"], b["dir"]))
+        return b
 
     def _set_input(self, b):
         for t, x in self.inputs:
             if same_input(x, b):
                 self.inp.set(t)
-                return
+                break
+        self._input_changed()
+
+    def _input_changed(self):
+        """Выбрана ось — показать порог и предупредить, если ось работает как ручка/РУД."""
+        b = self._sel_input()
+        if b is None or b["type"] != "axis":
+            self.ax_row.grid_remove()
+            self.ax_warn.configure(text="")
+            return
+        self.ax_row.grid()
+        self.thr.set("%.2f" % axis_thr(self.cfg, b["index"], b["dir"]))
+        self.thr_lbl.configure(text="срабатывает при оси %s порога (тот же порог, что на вкладке «Оси»)"
+                               % ("≥" if b["dir"] == "+" else "≤"))
+        roles = axis_roles(self.cfg, b["index"])
+        self.ax_warn.configure(text=(
+            "⚠ ось работает как %s — двойное срабатывание («Оси» → «Откл. аналог»)" % ", ".join(dict(AXIS_ROLES)[r].split(" (")[0] for r in roles)) if roles else "")
+
+    def _apply_thr(self, b):
+        """Записать порог из поля (как «Порог» на плитке оси). Возвращает привязку с новым порогом."""
+        try:
+            v = float(self.thr.get().replace(",", "."))
+        except ValueError:
+            v = axis_thr(self.cfg, b["index"], b["dir"])
+        if round(max(-0.95, min(0.95, v)), 3) != axis_thr(self.cfg, b["index"], b["dir"]):
+            set_axis_thr(self.cfg, b["index"], b["dir"], v)
+            self.changed = True
+            self._reload_inputs()
+        return axis_binding(b["index"], b["dir"], axis_thr(self.cfg, b["index"], b["dir"]))
 
     def _refresh_btns(self, select=None):
         self.tv.delete(*self.tv.get_children())
@@ -1446,6 +1507,13 @@ class SubprofileManager(tk.Toplevel):
             if rest:
                 self.key.set(key_text(rest[0]))
 
+    def _moved_axes(self):
+        """Оси, которые сдвинули с открытия окна: [(номер, значение)]."""
+        ax = [v for v in (self._state().get("axes") or ())]
+        if self._axes0 is None or len(self._axes0) != len(ax):
+            self._axes0 = list(ax)
+        return [(i, v) for i, v in enumerate(ax) if v == v and abs(v - self._axes0[i]) > 0.15]
+
     def _pressed_now(self):
         """Что сейчас нажато на X52 (кнопки и хатки)."""
         st = self._state()
@@ -1462,9 +1530,10 @@ class SubprofileManager(tk.Toplevel):
         if not self._state().get("name"):
             t = "X52 не виден программе — проверьте вкладку «Главная»."
         else:
-            now = self._pressed_now()
-            t = ("Сейчас нажата на X52: " + ", ".join(self._input_text(b) for b in now) if now else
-                 "Нажмите кнопку на X52 — здесь будет видно её номер и название.")
+            now = [self._input_text(b) for b in self._pressed_now()]
+            now += ["%s = %+.2f" % (axis_name(self.cfg, i), v) for i, v in self._moved_axes()]
+            t = ("Сейчас на X52: " + ", ".join(now) if now else
+                 "Нажмите кнопку или двиньте ось на X52 — здесь будет видно её номер и название.")
         if self.now_lbl.cget("text") != t:
             self.now_lbl.configure(text=t)
         self._live_job = self.after(100, self._live)
@@ -1478,8 +1547,8 @@ class SubprofileManager(tk.Toplevel):
         if self._press_job:                     # второй щелчок — ждём заново
             self.after_cancel(self._press_job)
             self._press_job = None
-        b0, h0 = list(st["buttons"]), list(st["hats"])
-        self.press_btn.configure(text="Нажмите кнопку…")
+        b0, h0, a0 = list(st["buttons"]), list(st["hats"]), list(st.get("axes") or ())
+        self.press_btn.configure(text="Нажмите кнопку / двиньте ось…")
         end = time.time() + 10
 
         def poll():
@@ -1493,6 +1562,10 @@ class SubprofileManager(tk.Toplevel):
                 if (sx or sy) and not (hi < len(h0) and any(h0[hi])):
                     d = next(k for k, v in HAT8.items() if v == (sx, sy))
                     return self._pressed(hat_binding(hi, d))
+            for i, v in enumerate(s.get("axes") or ()):
+                if i < len(a0) and v == v and a0[i] == a0[i] and abs(v - a0[i]) > 0.5:   # полхода, как «Назначить»
+                    d = "+" if v > a0[i] else "-"
+                    return self._pressed(axis_binding(i, d, axis_thr(self.cfg, i, d)))
             for i, v in enumerate(s["buttons"]):
                 if not v and i < len(b0):
                     b0[i] = 0
@@ -1545,8 +1618,16 @@ class SubprofileManager(tk.Toplevel):
             messagebox.showinfo("Подпрофиль", "Сначала создайте подпрофиль («Новый»).", parent=self)
             return None
         if b is None:
-            messagebox.showwarning("Подпрофиль", "Выберите кнопку X52 (список или «Нажать на X52…»).", parent=self)
+            messagebox.showwarning("Подпрофиль", "Выберите кнопку или ось X52 (список или «Нажать на X52…»).",
+                                   parent=self)
             return None
+        if any(ca["mode"] == "subprofile" and not ca.get("sub") and any(same_input(x, b) for x in ca["bindings"])
+               for ca in self.cfg["custom_actions"]):
+            messagebox.showwarning("Подпрофиль", "«%s» включает подпрофиль — в подпрофиле назначьте другую кнопку "
+                                   "или другое направление оси." % input_name(self.cfg, b), parent=self)
+            return None
+        if b["type"] == "axis":
+            b = self._apply_thr(b)
         if need_new and find_slots(self.cfg, b, 0, sp["name"]):
             messagebox.showwarning("Подпрофиль", "«%s» уже есть в подпрофиле — выберите её в таблице и "
                                    "«Сохранить изменения»." % input_name(self.cfg, b), parent=self)
@@ -1587,6 +1668,8 @@ class SubprofileManager(tk.Toplevel):
         if sp is None or b is None:
             self._check(False)
             return
+        if b["type"] == "axis":
+            b = self._apply_thr(b)
         if self.view.open_dialog(b, sub=sp["name"], owner=self):
             self.changed = True
         self._refresh_btns(select=b)

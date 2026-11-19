@@ -578,7 +578,7 @@ def test_551_button_assignment_to_several_profiles(app):
     app.refresh_profiles()
 
 
-def test_560_subprofile_by_axis_and_overlay(app):
+def test_560_subprofile_by_axis_and_overlay(app, monkeypatch):
     import x52_rsview as rv
     app.create_profile("Подпр", "dcs")
     top = __import__("tkinter").Toplevel(app)                                   # как из окна оси: поверх другого окна
@@ -594,11 +594,11 @@ def test_560_subprofile_by_axis_and_overlay(app):
     assert mgr.prev.cget("text") == "Подпр - ↻ Выбор оружия"
     assert app.cfg["subprofiles"] == [{"name": "Выбор оружия", "icon": "↻", "size": 30, "color": "#ff0000"}]
     # кнопка подпрофиля — как шаг последовательности: кнопка X52, модификатор, клавиша, «Добавить»
-    assert wait(app, lambda: "Нажмите кнопку на X52" in mgr.now_lbl.cget("text"))
+    assert wait(app, lambda: "Нажмите кнопку или двиньте ось на X52" in mgr.now_lbl.cget("text"))
     mgr._wait_press()
     X52.buttons[3] = 1
     assert wait(app, lambda: mgr.inp.get() == "Кнопка 4 — Fire B")
-    assert wait(app, lambda: "Сейчас нажата на X52: Кнопка 4 — Fire B" in mgr.now_lbl.cget("text"))
+    assert wait(app, lambda: "Сейчас на X52: Кнопка 4 — Fire B" in mgr.now_lbl.cget("text"))
     X52.buttons[3] = 0
     mgr.mods["LSHIFT"].set(True)
     mgr.key.set(core.key_text("Q"))
@@ -616,6 +616,40 @@ def test_560_subprofile_by_axis_and_overlay(app):
     assert not rv.find_slots(app.cfg, rv.btn_binding(3), 0, "Выбор оружия")
     ca = rv.find_slots(app.cfg, rv.btn_binding(0), 0, "Выбор оружия")["single"]
     assert ca["keys"] == ["Q"] and ca["mode"] == "repeat"
+    # ось в подпрофиле: «Нажать на X52…» + двинуть крутилку, порог, клавиша
+    X52.axes[4] = -1.0
+    pump(app, 0.1)
+    mgr._wait_press()
+    X52.axes[4] = 0.8
+    assert wait(app, lambda: mgr.inp.get().startswith(rv.axis_name(app.cfg, 4) + " +"))
+    assert mgr.ax_row.winfo_manager() == "grid" and "≥ порога" in mgr.thr_lbl.cget("text")
+    assert wait(app, lambda: "%s = +0.80" % rv.axis_name(app.cfg, 4) in mgr.now_lbl.cget("text"))
+    X52.axes[4] = -1.0
+    mgr.thr.set("0.25")
+    mgr.mods["LSHIFT"].set(False)
+    mgr.rep.set(False)
+    mgr.key.set(core.key_text("R"))
+    mgr.tv.selection_remove(*mgr.tv.selection())
+    mgr.add_btn()
+    ax4 = rv.axis_binding(4, "+", 0.25)
+    assert rv.axis_thr(app.cfg, 4, "+") == 0.25
+    ca = rv.find_slots(app.cfg, ax4, 0, "Выбор оружия")["single"]
+    assert ca["keys"] == ["R"] and ca["bindings"][0]["thr"] == 0.25
+    assert any("(≥ +0.25)" in mgr.tv.item(i, "values")[0] for i in mgr.tv.get_children())
+    mgr._set_input(rv.btn_binding(0))
+    assert mgr.ax_row.winfo_manager() == ""                     # у кнопки порога нет
+    # ось, которая включает подпрофиль, в нём назначить нельзя
+    sw = rv.axis_binding(6, "+", 0.5)
+    rv.apply_slots(app.cfg, sw, 0, {"single": {"enabled": True, "special": False, "kind": "sub", "name": "Вкл",
+                                               "subprofile": "Выбор оружия"},
+                                    "long": {"enabled": False}, "release": {"enabled": False}})
+    warned = []
+    monkeypatch.setattr(rv.messagebox, "showwarning", lambda *a, **k: warned.append(a[1]))
+    mgr._set_input(sw)
+    mgr.add_btn()
+    assert warned and "включает подпрофиль" in warned[-1]
+    assert not rv.find_slots(app.cfg, sw, 0, "Выбор оружия")
+    app.cfg["custom_actions"] = [x for x in app.cfg["custom_actions"] if x["mode"] != "subprofile"]
     mgr.new_sub("Второй")
     mgr.delete_sub(confirm=False)
     assert [sp["name"] for sp in app.cfg["subprofiles"]] == ["Выбор оружия"]

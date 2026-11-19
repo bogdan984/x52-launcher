@@ -205,3 +205,35 @@ def test_sub_button_other_actions_survive_sanitize_and_listing():
     assert ca["seq_cycle"] and [st["keys"] for st in ca["steps"]] == [["1"], ["2"]]
     assert rv.column_from_ca(ca, d2)["kind"] == "cycle"
     assert rv.find_slots(d2, BTN)["single"]["keys"] == ["SPACE"]   # кнопка профиля не задета
+
+
+# ---------------------------------------------------------------- оси в подпрофиле
+def test_axis_direction_in_subprofile_replaces_profile_axis():
+    d, rv, off = _empty_sub_cfg()
+    knob = {"type": "axis", "index": 3, "dir": "+", "thr": 0.5}        # крутилка вправо
+    rv.apply_slots(d, knob, 0, {"single": _col(name="Зум", key="Z", continuous=True), "long": off,
+                                "release": off})                         # профиль: держать Z
+    rv.apply_slots(d, knob, 0, {"single": _col(name="Радар", key="R"), "long": off, "release": off}, "Оружие")
+    rv.set_axis_thr(d, 3, "+", 0.3)                                      # порог общий, как на вкладке «Оси»
+    assert rv.find_slots(d, knob, 0, "Оружие")["single"]["bindings"][0]["thr"] == 0.3
+    s = Sim(d)
+    s.axes[3] = 0.4
+    assert "Z" in s.run(50)                                              # профиль: Z, пока за порогом
+    s.axes[3] = 0.0
+    s.run(30)
+    s.axes[6] = 0.8                                                      # подпрофиль
+    s.run(20)
+    s.axes[3] = 0.4
+    k = s.run(150)                                                       # нажатие R (тап 60 мс) закончилось
+    assert "R" in k and "Z" not in k                                     # одно нажатие R, без Z
+    s.axes[3] = 0.29                                                     # чуть ниже порога — отпускание
+    assert "R" not in s.run(50)                                          # повторно не жмёт
+    s.axes[3] = 0.0
+    s.run(30)
+    s.axes[3] = 0.4
+    assert "R" in s.run(50)                                              # снова перешли порог — снова R
+    s.axes[3] = 0.0
+    s.axes[6] = 0.0
+    s.run(30)
+    s.axes[3] = 0.4
+    assert "Z" in s.run(50)                                              # подпрофиль выключен — снова Z
