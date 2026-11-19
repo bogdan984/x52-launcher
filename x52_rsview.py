@@ -214,7 +214,8 @@ def column_problem(col):
     if col["kind"] == "cycle" and not col.get("cycle_steps"):
         return "добавьте шаги перебора («+ шаг»)"
     if col["kind"] == "seq" and not col.get("seq"):
-        return "выберите последовательность (меню «Последовательности»)"
+        return ("выберите последовательность в поле «Последовательность:» этой колонки "
+                "(или «Создать / изменить…» и выделите её в списке)")
     if col["kind"] == "profile" and not col.get("profile"):
         return "выберите профиль"
     if col["kind"] == "sub" and not col.get("subprofile"):
@@ -848,9 +849,14 @@ class RsActionDialog(tk.Toplevel):
             if c.seq.get() not in names:
                 c.seq.set("")
         new = [n for n in names if n not in before]
-        if new:
-            col.seq.set(new[-1])
+        # новая — её; иначе та, что была выделена в окне последовательностей при закрытии
+        picked = getattr(getattr(self._edit_seqs_cb, "__self__", None), "seq_picked", None)
+        pick = new[-1] if new else (picked if picked in names else None)
+        if pick:
+            col.seq.set(pick)
+        if col.seq.get():
             col.kind.set("seq")
+            col._state()
 
     def _edit_subs(self, col):
         """Окно подпрофилей прямо из колонки; новый подпрофиль сразу выбран."""
@@ -963,6 +969,7 @@ class SequenceManager(tk.Toplevel):
     def _load(self):
         self.tv.delete(*self.tv.get_children())
         sq = self._seq()
+        self.picked = sq["name"] if sq else None   # выделенная при закрытии — подставит окно назначения
         if sq:
             for i, st in enumerate(sq["steps"]):
                 self.tv.insert("", "end", iid=str(i), values=(st.get("name", ""), keys_text(st["keys"]),
@@ -2585,6 +2592,7 @@ class RsView(ttk.Frame):
                 owner.grab_set()
             except tk.TclError:
                 pass
+        self.seq_picked = getattr(mgr, "picked", None)
         return [sq["name"] for sq in self.app.cfg["sequences"]]
 
     def _seq_changed(self):

@@ -784,6 +784,112 @@ def test_563_subprofile_activator_and_keyless_add(app, monkeypatch):
     os.remove(app.L.profile_path("Взлёт2"))
     app.refresh_profiles()
 
+def test_564_subprofile_keyless_add_new_sequence_real_windows(app, monkeypatch):
+    """Путь пользователя целиком, настоящие окна: «Добавить» без клавиши → «Последовательность нажатий» →
+    «Создать / изменить…» → новая последовательность → «Закрыть» → OK: последовательность назначена."""
+    import tkinter as _tk
+    import x52_rsview as rv
+    app.create_profile("Взлёт3", "dcs")
+    top = _tk.Toplevel(app)
+    mgr = rv.SubprofileManager(top, app.cfg, view=app.rs)
+    mgr.new_sub("Запуск")
+    warned = []
+    monkeypatch.setattr(rv.messagebox, "showwarning", lambda *a, **k: warned.append(a[1]))
+    log = []
+
+    def find(cls):
+        out = []
+
+        def walk(w):
+            for ch in w.winfo_children():
+                if isinstance(ch, cls):
+                    out.append(ch)
+                walk(ch)
+        walk(app)
+        return out[-1] if out else None
+
+    def in_seq_mgr():
+        sm = find(rv.SequenceManager)
+        if sm is None:
+            return app.after(50, in_seq_mgr)
+        sm.new_seq("Запуск двигателей")
+        sm.s_key.set(core.key_text("HOME"))
+        sm.add_step()
+        log.append("seq")
+        sm.destroy()                                        # «Закрыть»
+        app.after(150, press_ok)
+
+    def press_ok():
+        dlg = find(rv.RsActionDialog)
+        log.append(("before_ok", dlg.cols["single"].seq.get(), dlg.cols["single"].kind.get(),
+                    dlg.cols["single"].en.get()))
+        dlg._ok()
+        if dlg.winfo_exists():
+            log.append("still_open")
+            dlg.destroy()
+
+    def in_action_dialog():
+        dlg = find(rv.RsActionDialog)
+        if dlg is None:
+            return app.after(50, in_action_dialog)
+        one = dlg.cols["single"]
+        log.append(("opened", one.name.get(), one.en.get()))
+        one.en.set(True)
+        one._state()
+        one.kind.set("seq")
+        one._state()
+        app.after(50, in_seq_mgr)
+        dlg._edit_seqs(one)                                  # «Создать / изменить…» (ждёт окно последовательностей)
+
+    mgr._set_input(rv.axis_binding(4, "+", 0.5))
+    mgr.b_name.set("Запуск")
+    mgr.key.set("")
+    app.after(100, in_action_dialog)
+    mgr.add_btn()
+    ca = rv.find_slots(app.cfg, rv.axis_binding(4, "+", 0.5), 0, "Запуск").get("single")
+    assert not warned, warned
+    assert ca is not None and ca["mode"] == "sequence" and ca["seq"] == "Запуск двигателей"
+    # последовательность уже есть (создана раньше): в окне последовательностей её выделили и закрыли —
+    # в окне назначения она выбрана, OK без предупреждения (раньше: «выберите последовательность»)
+    app.cfg["sequences"].append({"name": "Глушить", "steps": [{"keys": ["END"], "delay_ms": 0, "duration_ms": 100}]})
+
+    def pick_existing():
+        sm = find(rv.SequenceManager)
+        if sm is None:
+            return app.after(50, pick_existing)
+        names = [q["name"] for q in app.cfg["sequences"]]
+        sm.lb.selection_clear(0, "end")
+        sm.lb.selection_set(names.index("Глушить"))
+        sm.lb.event_generate("<<ListboxSelect>>")
+        app.update()
+        sm.destroy()
+        app.after(150, press_ok)
+
+    def in_action_dialog2():
+        dlg = find(rv.RsActionDialog)
+        if dlg is None:
+            return app.after(50, in_action_dialog2)
+        one = dlg.cols["single"]
+        one.en.set(True)
+        one.kind.set("seq")
+        one._state()
+        app.after(50, pick_existing)
+        dlg._edit_seqs(one)
+    mgr._set_input(rv.axis_binding(4, "-", -0.5))
+    mgr.b_name.set("Глушить")
+    app.after(100, in_action_dialog2)
+    mgr.add_btn()
+    ca = rv.find_slots(app.cfg, rv.axis_binding(4, "-", -0.5), 0, "Запуск").get("single")
+    assert not warned, warned
+    assert ca is not None and ca["seq"] == "Глушить" and ca["name"] == "Глушить"
+    assert "still_open" not in log
+    app.cfg["sequences"] = [q for q in app.cfg["sequences"] if q["name"] not in ("Запуск двигателей", "Глушить")]
+    mgr.destroy()
+    top.destroy()
+    app.switch_profile("ACE COMBAT 8")
+    os.remove(app.L.profile_path("Взлёт3"))
+    app.refresh_profiles()
+
 def test_559_profile_cycle_copied_to_profiles(app):
     import x52_rsview as rv
     for n in ("Круг-1", "Круг-2", "Круг-3"):
