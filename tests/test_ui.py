@@ -581,25 +581,46 @@ def test_551_button_assignment_to_several_profiles(app):
 def test_560_subprofile_by_axis_and_overlay(app):
     import x52_rsview as rv
     app.create_profile("Подпр", "dcs")
-    mgr = rv.SubprofileManager(app, app.cfg)
+    mgr = rv.SubprofileManager(app, app.cfg, view=app.rs)
+    assert "Новый" in mgr.warn.cget("text")                    # пусто — подсказка
     mgr.new_sub("Выбор оружия")
     mgr.icon.set("↻")
+    mgr.icon.event_generate("<<ComboboxSelected>>")
     mgr.size.set("30")
     mgr.color = "#ff0000"
-    mgr.save_sub()
+    mgr._apply()                                               # без «Сохранить» — сразу
     assert mgr.prev.cget("text") == "Подпр - ↻ Выбор оружия"
-    mgr.destroy()
     assert app.cfg["subprofiles"] == [{"name": "Выбор оружия", "icon": "↻", "size": 30, "color": "#ff0000"}]
+    # кнопка подпрофиля — как шаг последовательности: кнопка X52, модификатор, клавиша, «Добавить»
+    mgr._wait_press()
+    X52.buttons[3] = 1
+    assert wait(app, lambda: mgr.inp.get() == rv.input_name(app.cfg, rv.btn_binding(3)))
+    X52.buttons[3] = 0
+    mgr.mods["LSHIFT"].set(True)
+    mgr.key.set(core.key_text("Q"))
+    mgr.add_btn()
+    ca = rv.find_slots(app.cfg, rv.btn_binding(3), 0, "Выбор оружия")["single"]
+    assert ca["keys"] == ["LSHIFT", "Q"] and ca["mode"] == "tap" and len(mgr.tv.get_children()) == 1
+    assert not rv.find_slots(app.cfg, rv.btn_binding(3))       # в профиле кнопка свободна
+    mgr.tv.selection_set(mgr.tv.get_children()[0])
+    mgr._load_btn()
+    assert mgr.mods["LSHIFT"].get() and mgr.key.get() == core.key_text("Q")
+    mgr._set_input(rv.btn_binding(0))                          # та же строка — на кнопку 1
+    mgr.mods["LSHIFT"].set(False)
+    mgr.rep.set(True)
+    mgr.update_btn()
+    assert not rv.find_slots(app.cfg, rv.btn_binding(3), 0, "Выбор оружия")
+    ca = rv.find_slots(app.cfg, rv.btn_binding(0), 0, "Выбор оружия")["single"]
+    assert ca["keys"] == ["Q"] and ca["mode"] == "repeat"
+    mgr.new_sub("Второй")
+    mgr.delete_sub(confirm=False)
+    assert [sp["name"] for sp in app.cfg["subprofiles"]] == ["Выбор оружия"]
+    mgr.destroy()
     off = {"enabled": False, "name": "", "kind": "key", "mods": [], "key": "", "repeat": False,
            "repeat_ms": 100, "continuous": False, "seq": "", "profile": "", "special": False, "cam": "left"}
     ax = rv.axis_binding(6, "+", 0.5)
-    app.rs.open_dialog(ax, cols={"single": dict(off, enabled=True, name="Оружие", kind="sub",
-                                                subprofile="Выбор оружия"), "long": off, "release": off})
-    assert app.rs.cur_sub() == "Выбор оружия"            # после OK плитки — сразу кнопки подпрофиля
-    app.rs.open_dialog(rv.btn_binding(0), cols={"single": dict(off, enabled=True, name="След. оружие", key="Q"),
-                                                "long": off, "release": off})
-    assert rv.find_slots(app.cfg, rv.btn_binding(0), 0, "Выбор оружия")["single"]["keys"] == ["Q"]
-    app.rs.set_sub("")
+    assert app.rs.open_dialog(ax, cols={"single": dict(off, enabled=True, name="Оружие", kind="sub",
+                                                       subprofile="Выбор оружия"), "long": off, "release": off})
     app.glob["overlay"].update(enabled=True, mode="change", seconds=1)
     was_on = app.worker.bridge_on
     if not was_on:
@@ -612,12 +633,11 @@ def test_560_subprofile_by_axis_and_overlay(app):
         assert wait(app, lambda: app.overlay.text == "Подпр" and app.overlay.sub_lbl.winfo_manager() == "pack")
         assert app.overlay.sub_lbl.cget("text").strip() == "- ↻ Выбор оружия"
         assert app.overlay.sub_lbl.cget("fg") == "#ff0000"
-        assert wait(app, lambda: app.rs.cur_sub() == "Выбор оружия")         # плитки — за подпрофилем
         pump(app, 1.3)
         assert app.overlay.alpha > 0                                         # пока включён — не скрывается
     finally:
         X52.axes[6] = -1.0
-    assert wait(app, lambda: app.worker.mapper.subprofile == "" and app.rs.cur_sub() == "")
+    assert wait(app, lambda: app.worker.mapper.subprofile == "")
     assert wait(app, lambda: app.overlay.sub_lbl.winfo_manager() == "")
     app.glob["overlay"]["enabled"] = False
     if not was_on:
