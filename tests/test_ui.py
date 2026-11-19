@@ -653,6 +653,50 @@ def test_560_subprofile_by_axis_and_overlay(app):
     app.refresh_profiles()
 
 
+def test_562_subprofile_other_actions_button(app, monkeypatch):
+    """«Другие действия…»: настоящее окно RsActionDialog открывается поверх окна подпрофилей, результат
+    (перебор по кругу + долгое нажатие) попадает в подпрофиль и в таблицу."""
+    import tkinter as _tk
+    import x52_rsview as rv
+    app.create_profile("Подпр2", "dcs")
+    top = _tk.Toplevel(app)
+    mgr = rv.SubprofileManager(top, app.cfg, view=app.rs)
+    mgr.new_sub("Оружие")
+    mgr._set_input(rv.btn_binding(0))
+    seen = {}
+    real = rv.RsActionDialog
+
+    def fake(master, title, cols, *a, **kw):
+        dlg = real(master, title, cols, *a, **kw)
+        seen.update(master=master, title=title, subprofiles=kw.get("subprofiles"), share=kw.get("share"))
+        one, lng = dlg.cols["single"], dlg.cols["long"]
+        one.en.set(True)
+        one.name.set("Оружие")
+        one.kind.set("cycle")
+        one.cycle_steps = [["1"], ["LSHIFT", "2"], ["3"]]
+        lng.en.set(True)
+        lng.name.set("Сброс")
+        lng.kind.set("key")
+        lng.key.set(core.key_text("R"))
+        dlg.after(50, dlg._ok)
+        return dlg
+    monkeypatch.setattr(rv, "RsActionDialog", fake)
+    mgr.more_btn()
+    assert seen["master"] is mgr and seen["subprofiles"] is None and seen["share"] is None
+    assert "подпрофиль «Оружие»" in seen["title"]
+    slots = rv.find_slots(app.cfg, rv.btn_binding(0), 0, "Оружие")
+    assert slots["single"]["seq_cycle"] and len(slots["single"]["steps"]) == 3
+    assert slots["long"]["keys"] == ["R"]
+    assert not rv.find_slots(app.cfg, rv.btn_binding(0))                 # в профиле кнопка свободна
+    rows = [mgr.tv.item(i, "values") for i in mgr.tv.get_children()]
+    assert len(rows) == 1 and "Перебор" in rows[0][2] and "LP" in rows[0][3]
+    mgr.destroy()
+    top.destroy()
+    app.switch_profile("ACE COMBAT 8")
+    os.remove(app.L.profile_path("Подпр2"))
+    app.refresh_profiles()
+
+
 def test_559_profile_cycle_copied_to_profiles(app):
     import x52_rsview as rv
     for n in ("Круг-1", "Круг-2", "Круг-3"):
@@ -2609,4 +2653,3 @@ def test_500_selftest_mode_writes_result(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "vgamepad", types.SimpleNamespace(
         VX360Gamepad=lambda: (_ for _ in ()).throw(OSError("нет ViGEmBus")), XUSB_BUTTON=_B))
     assert L.run_selftest(str(res)) == 1 and "нет ViGEmBus" in res.read_text(encoding="utf-8")
-

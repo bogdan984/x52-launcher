@@ -132,3 +132,76 @@ def test_rsview_slots_per_subprofile():
     assert new["sub"] == "Выбор оружия" and new["keys"] == ["R"]
     assert not rv.find_slots(d, {"type": "button", "index": 1})                     # в профиле кнопка свободна
     assert rv.sub_label(d["subprofiles"][0]) == "↻ Выбор оружия"
+
+
+# ---------------------------------------------------------------- «Другие действия…» в подпрофиле
+def _col(**kw):
+    base = {"enabled": True, "special": False, "kind": "key", "name": "Действие", "mods": [], "key": "",
+            "repeat": False, "repeat_ms": 100, "continuous": False, "seq": "", "profile": "", "cam": "left",
+            "subprofile": "", "hold_delay_ms": 0}
+    base.update(kw)
+    return base
+
+
+def _empty_sub_cfg():
+    d = c.sanitize_config(dict(c.default_config(), profile_name="Полёт", sequences=[
+        {"name": "Залп", "steps": [{"keys": ["F"], "delay_ms": 0, "duration_ms": 50},
+                                   {"keys": ["LCTRL", "G"], "delay_ms": 200, "duration_ms": 50}]}],
+        subprofiles=[{"name": "Оружие", "icon": "", "color": "#ffcc33", "size": 22}]))
+    import x52_rsview as rv
+    off = {"enabled": False}
+    rv.apply_slots(d, AX, 0, {"single": _col(name="Подпрофиль", kind="sub", subprofile="Оружие"),
+                              "long": off, "release": off})
+    rv.apply_slots(d, BTN, 0, {"single": _col(name="Огонь", key="SPACE"), "long": off, "release": off})
+    return d, rv, off
+
+
+def test_sub_button_cycle_via_other_actions():
+    d, rv, off = _empty_sub_cfg()
+    cyc = _col(name="Оружие", kind="cycle", cycle_steps=[["1"], ["LSHIFT", "2"], ["3"]], cycle_hold_ms=50,
+               seq_cycle_reset=False)
+    rv.apply_slots(d, BTN, 0, {"single": cyc, "long": off, "release": off}, "Оружие")
+    s = Sim(d)
+    assert s.tap() == {"SPACE"}                                    # профиль: огонь
+    s.axes[6] = 0.8
+    s.run(20)
+    assert s.tap() == {"1"} and s.tap() == {"LSHIFT", "2"} and s.tap() == {"3"} and s.tap() == {"1"}
+    s.axes[6] = 0.0
+    s.run(20)
+    assert s.tap() == {"SPACE"}
+
+
+def test_sub_button_library_sequence_and_long_press():
+    d, rv, off = _empty_sub_cfg()
+    rv.apply_slots(d, BTN, 0, {"single": _col(name="Залп", kind="seq", seq="Залп"),
+                               "long": _col(name="Сброс", key="R"), "release": off}, "Оружие")
+    ca = rv.find_slots(d, BTN, 0, "Оружие")
+    assert set(ca) == {"single", "long"} and ca["single"]["mode"] == "sequence" and ca["long"]["keys"] == ["R"]
+    d["long_press_ms"] = 300
+    s = Sim(d)
+    s.axes[6] = 0.8
+    s.run(20)
+    seen = []
+    s.btn[0] = 1
+    seen += [s.run(10)]
+    s.btn[0] = 0
+    for _ in range(80):                                            # короткое: после отпускания идёт «Залп»
+        seen.append(s.run(5))
+    keys = set().union(*seen)
+    assert {"F", "LCTRL", "G"} <= keys and "R" not in keys and "SPACE" not in keys
+    s.run(300)
+    s.btn[0] = 1                                                   # долгое — клавиша R, пока держим
+    assert "R" in s.run(500)
+    s.btn[0] = 0
+    s.run(100)
+
+
+def test_sub_button_other_actions_survive_sanitize_and_listing():
+    d, rv, off = _empty_sub_cfg()
+    rv.apply_slots(d, BTN, 0, {"single": _col(name="Оружие", kind="cycle", cycle_steps=[["1"], ["2"]]),
+                               "long": off, "release": off}, "Оружие")
+    d2 = c.sanitize_config(copy.deepcopy(d))
+    ca = rv.find_slots(d2, BTN, 0, "Оружие")["single"]
+    assert ca["seq_cycle"] and [st["keys"] for st in ca["steps"]] == [["1"], ["2"]]
+    assert rv.column_from_ca(ca, d2)["kind"] == "cycle"
+    assert rv.find_slots(d2, BTN)["single"]["keys"] == ["SPACE"]   # кнопка профиля не задета
