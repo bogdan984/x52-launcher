@@ -731,6 +731,59 @@ def test_562_subprofile_other_actions_button(app, monkeypatch):
     app.refresh_profiles()
 
 
+def test_563_subprofile_activator_and_keyless_add(app, monkeypatch):
+    """«Включается, пока»: крутилка / кнопка включает подпрофиль прямо из окна подпрофилей;
+    «Добавить» без клавиши открывает «Другие действия…» с названием из поля."""
+    import tkinter as _tk
+    import x52_rsview as rv
+    app.create_profile("Взлёт2", "dcs")
+    top = _tk.Toplevel(app)
+    mgr = rv.SubprofileManager(top, app.cfg, view=app.rs)
+    mgr.new_sub("Запуск")
+    assert mgr.act.get() == mgr.NO_ACT
+    X52.axes[3] = -1.0
+    pump(app, 0.1)
+    mgr._wait_press("act")                                    # крутилка 1 — включатель
+    X52.axes[3] = 0.8
+    assert wait(app, lambda: mgr.act.get().startswith(rv.axis_name(app.cfg, 3) + " +"))
+    X52.axes[3] = -1.0
+    k1 = rv.axis_binding(3, "+", rv.axis_thr(app.cfg, 3, "+"))
+    sw = rv.find_slots(app.cfg, k1)["single"]
+    assert sw["mode"] == "subprofile" and sw["subprofile"] == "Запуск"
+    assert mgr.act_thr_row.winfo_manager() == "grid"
+    mgr.act_thr.set("0.30")
+    mgr._act_thr_changed()
+    assert rv.axis_thr(app.cfg, 3, "+") == 0.3
+    # крутилка 2 «+», без клавиши — «Добавить» открывает полное окно
+    calls = []
+    monkeypatch.setattr(app.rs, "open_dialog", lambda b, **kw: calls.append((b, kw)) or True)
+    mgr._set_input(rv.axis_binding(4, "+", 0.5))
+    mgr.b_name.set("Запуск")
+    mgr.key.set("")
+    mgr.add_btn()
+    assert len(calls) == 1 and calls[0][0]["index"] == 4 and calls[0][0]["dir"] == "+"
+    assert calls[0][1]["sub"] == "Запуск" and calls[0][1]["name"] == "Запуск" and calls[0][1]["owner"] is mgr
+    # включатель — кнопка, на которой в профиле уже есть действие: спросить и заменить
+    off = {"enabled": False}
+    rv.apply_slots(app.cfg, rv.btn_binding(5), 0, {"single": {"enabled": True, "special": False, "kind": "key",
+                                                              "name": "Огонь", "key": "SPACE", "mods": []},
+                                                   "long": off, "release": off})
+    asked = []
+    monkeypatch.setattr(rv.messagebox, "askyesno", lambda *a, **k: asked.append(a[1]) or True)
+    mgr._set_activator(rv.btn_binding(5))
+    assert asked and "Огонь" in asked[-1]
+    assert rv.find_slots(app.cfg, rv.btn_binding(5))["single"]["mode"] == "subprofile"
+    assert not rv.find_slots(app.cfg, k1)                     # прежний включатель (крутилка 1) снят
+    assert len(mgr._activators("Запуск")) == 1
+    mgr.act.set(mgr.NO_ACT)
+    mgr._act_selected()
+    assert not mgr._activators("Запуск")
+    mgr.destroy()
+    top.destroy()
+    app.switch_profile("ACE COMBAT 8")
+    os.remove(app.L.profile_path("Взлёт2"))
+    app.refresh_profiles()
+
 def test_559_profile_cycle_copied_to_profiles(app):
     import x52_rsview as rv
     for n in ("Круг-1", "Круг-2", "Круг-3"):

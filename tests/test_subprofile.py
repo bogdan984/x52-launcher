@@ -237,3 +237,77 @@ def test_axis_direction_in_subprofile_replaces_profile_axis():
     s.run(30)
     s.axes[3] = 0.4
     assert "Z" in s.run(50)                                              # подпрофиль выключен — снова Z
+
+
+# ---------------------------------------------------------------- сценарий «Запуск»: крутилка 1 включает
+# подпрофиль, в нём крутилка 2: «+» — последовательность запуска, «−» — выключения
+START = [{"keys": ["LSHIFT", "HOME"], "delay_ms": 0, "duration_ms": 50},
+         {"keys": ["RSHIFT", "HOME"], "delay_ms": 300, "duration_ms": 50},
+         {"keys": ["LWIN", "HOME"], "delay_ms": 600, "duration_ms": 50}]
+STOP = [{"keys": ["RSHIFT", "END"], "delay_ms": 0, "duration_ms": 50},
+        {"keys": ["LSHIFT", "END"], "delay_ms": 300, "duration_ms": 50}]
+
+
+def _start_cfg(activator):
+    import x52_rsview as rv
+    d = c.sanitize_config(dict(c.default_config(), profile_name="Взлёт",
+                               sequences=[{"name": "Запуск", "steps": START}, {"name": "Глушить", "steps": STOP}],
+                               subprofiles=[{"name": "Запуск", "icon": "↻", "color": "#ffcc33", "size": 22}]))
+    off = {"enabled": False}
+    rv.apply_slots(d, activator, 0, {"single": _col(name="Вкл", kind="sub", subprofile="Запуск"),
+                                     "long": off, "release": off})
+    k2p, k2m = {"type": "axis", "index": 4, "dir": "+", "thr": 0.5}, {"type": "axis", "index": 4, "dir": "-", "thr": -0.5}
+    rv.apply_slots(d, k2p, 0, {"single": _col(name="Запуск", kind="seq", seq="Запуск"), "long": off,
+                               "release": off}, "Запуск")
+    rv.apply_slots(d, k2m, 0, {"single": _col(name="Глушить", kind="seq", seq="Глушить"), "long": off,
+                               "release": off}, "Запуск")
+    return d
+
+
+def _keys_seen(s, ms):
+    out = []
+    for _ in range(int(ms / 5)):
+        k = s.run(5)
+        if k and (not out or out[-1] != k):
+            out.append(k)
+    return out
+
+
+def test_start_scenario_axis_activator():
+    s = Sim(_start_cfg({"type": "axis", "index": 3, "dir": "+", "thr": 0.5}))
+    s.axes[4] = 0.8                                                # подпрофиль выключен — крутилка 2 ничего
+    assert s.run(800) == set()
+    s.axes[4] = 0.0
+    s.run(50)
+    s.axes[3] = 0.8                                                # крутилка 1 — подпрофиль «Запуск»
+    s.run(20)
+    assert s.m.subprofile == "Запуск"
+    s.axes[4] = 0.8                                                # крутилка 2 «+» — вся последовательность
+    seen = _keys_seen(s, 900)
+    assert seen == [frozenset(st["keys"]) for st in START]
+    assert s.run(300) == set()                                     # держим — второй раз не идёт
+    s.axes[4] = -0.8                                               # «−» — выключение
+    assert _keys_seen(s, 600) == [frozenset(st["keys"]) for st in STOP]
+    s.axes[4] = 0.0
+    s.run(50)
+    s.axes[4] = 0.8                                                # снова «+» — снова запуск
+    s.run(20)
+    s.axes[3] = 0.0                                                # подпрофиль выключили посреди запуска
+    rest = _keys_seen(s, 900)
+    assert rest[-1] == frozenset(START[-1]["keys"])                # последовательность доиграла до конца
+
+
+def test_start_scenario_button_activator_held():
+    s = Sim(_start_cfg({"type": "button", "index": 5}))
+    s.btn[5] = 1                                                   # кнопку держим — подпрофиль включён
+    s.run(20)
+    assert s.m.subprofile == "Запуск"
+    s.axes[4] = -0.8
+    assert _keys_seen(s, 600) == [frozenset(st["keys"]) for st in STOP]
+    s.btn[5] = 0                                                   # отпустили — подпрофиль выключен
+    s.run(20)
+    assert s.m.subprofile == ""
+    s.axes[4] = 0.0
+    s.run(50)
+    s.axes[4] = 0.8
+    assert s.run(800) == set()
