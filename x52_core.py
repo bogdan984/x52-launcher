@@ -308,7 +308,11 @@ DEFAULT_PROFILE = "ACE COMBAT 8"
 CUSTOM_PREFIX = "custom:"
 CUSTOM_MODES = {"hold": "удерживать", "toggle": "переключатель", "sequence": "последовательность",
                 "repeat": "автоповтор", "profile": "смена профиля", "tap": "одно нажатие",
-                "camera": "обзор DCS"}
+                "camera": "обзор DCS", "subprofile": "подпрофиль"}
+# подпрофиль: пока вход действия «Подпрофиль» активен, его назначения заменяют основные на тех же входах
+SUB_ICONS = ("", "↻", "↺", "←", "→", "↑", "↓")
+SUB_COLOR = "#ffcc33"
+MAX_SUBPROFILES = 20
 # Обзор DCS из своих действий: правый стик виртуального геймпада (в DCS — оси «… (абсолют)»)
 DCS_CAM = (
     ("left", "Камера в кабине, горизонталь (абсолют) — влево", "CAM_LEFT"),
@@ -417,6 +421,8 @@ def custom_out_text(ca, layers_enabled=True):
              "next": "Следующий профиль", "prev": "Предыдущий профиль"}[pt["kind"]]
     elif ca["mode"] == "camera":
         t = "Обзор DCS: " + DCS_CAM_LABEL.get(ca.get("cam"), "?")
+    elif ca["mode"] == "subprofile":
+        t = "Подпрофиль «%s» (пока вход активен)" % (ca.get("subprofile") or "?")
     elif ca["mode"] == "sequence" and ca.get("seq_cycle") and not ca.get("seq"):
         t = "Перебор по кругу: " + " → ".join(keys_text(st["keys"]) for st in ca["steps"])
     elif ca["mode"] == "sequence" and ca.get("seq"):
@@ -447,6 +453,8 @@ def custom_out_text(ca, layers_enabled=True):
         t += " · " + {"short": "короткое", "long": "долгое", "release": "отпускание"}[ca["trigger"]]
     if layers_enabled and ca["layer"]:
         t += " · слой %d" % ca["layer"]
+    if ca.get("sub"):
+        t += " · в подпрофиле «%s»" % ca["sub"]
     return t
 
 
@@ -470,14 +478,16 @@ def conflicting_actions(cfg):
         ca = find_custom(cfg, aid)
         trig = ca["trigger"] if ca else "press"
         layer = ca["layer"] if (ca and layers_on) else 0
+        sub = ca.get("sub", "") if ca else ""
         for b in action_pair(cfg, aid):
             k = binding_key(b)
             if k:
-                items.append((aid, k, trig, layer))
+                items.append((aid, k, trig, layer, sub))
     bad = set()
-    for i, (a1, k1, t1, l1) in enumerate(items):
-        for a2, k2, t2, l2 in items[i + 1:]:
-            if a1 != a2 and k1 == k2 and _triggers_clash(t1, t2) and (l1 == 0 or l2 == 0 or l1 == l2):
+    for i, (a1, k1, t1, l1, s1) in enumerate(items):
+        for a2, k2, t2, l2, s2 in items[i + 1:]:
+            if (a1 != a2 and k1 == k2 and _triggers_clash(t1, t2) and (l1 == 0 or l2 == 0 or l1 == l2)
+                    and s1 == s2):
                 bad.update((a1, a2))
     return bad
 
@@ -592,6 +602,7 @@ def default_config():
         "game": {"builtin_actions": True, "virtual_pad": True, "launch_type": "steam", "exe_path": ""},
         "custom_actions": [],
         "sequences": [],
+        "subprofiles": [],
         "button_names": {},
         "axis_thr": {},
         "layers": default_layers(),
@@ -707,12 +718,24 @@ def sanitize_config(src):
         "launch_type": gm.get("launch_type") if gm.get("launch_type") in ("steam", "exe", "none") else "steam",
         "exe_path": gm.get("exe_path") if isinstance(gm.get("exe_path"), str) else "",
     }
+    sps = src.get("subprofiles") if isinstance(src.get("subprofiles"), list) else []
+    out["subprofiles"] = []
+    for sp in sps[:MAX_SUBPROFILES]:
+        if isinstance(sp, dict) and isinstance(sp.get("name"), str) and sp["name"].strip():
+            nm = sp["name"].strip()[:40]
+            col = sp.get("color")
+            if nm not in [x["name"] for x in out["subprofiles"]]:
+                out["subprofiles"].append({
+                    "name": nm, "icon": sp.get("icon") if sp.get("icon") in SUB_ICONS else "",
+                    "color": col if isinstance(col, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", col) else SUB_COLOR,
+                    "size": int(_num(sp.get("size"), 22, 10, 72))})
+    sub_names = [x["name"] for x in out["subprofiles"]]
     cas = src.get("custom_actions") if isinstance(src.get("custom_actions"), list) else []
     out["custom_actions"] = []
     seen = set()
     for x in cas[:MAX_CUSTOM]:
-        if not isinstance(x, dict):
-            continue
+        if not isinstance(x, dict) or (x.get("sub") and x.get("sub") not in sub_names):
+            continue                          # назначение удалённого подпрофиля
         cid = x.get("id") if isinstance(x.get("id"), str) and re.fullmatch(r"[A-Za-z0-9_]{1,32}", x["id"]) else ""
         if not cid or cid in seen:
             cid = "c1"
@@ -752,6 +775,8 @@ def sanitize_config(src):
             "cam": x.get("cam") if x.get("cam") in DCS_CAM_LABEL else "left",
             "trigger": x.get("trigger") if x.get("trigger") in CUSTOM_TRIGGERS else "press",
             "layer": layer if isinstance(layer, int) and not isinstance(layer, bool) and 0 <= layer <= 3 else 0,
+            "sub": x.get("sub") or "",
+            "subprofile": x.get("subprofile") if x.get("subprofile") in sub_names else "",
             "steps": steps,
             "bindings": _binding_pair(x.get("bindings"))})
     ly = g(src, "layers")
@@ -1166,6 +1191,9 @@ class Mapper(object):
         self.cyc_reset_done = set()  # aid, у которых это нажатие уже не шаг (был сброс / нажато до смены профиля)
         self.layer = 0               # текущий слой (0 — слои выключены / неизвестен)
         self.layer_known = True      # распознано ли положение колеса
+        self.subprofile = ""         # активный подпрофиль ("" — основной профиль)
+        self.sub_keys = frozenset()  # входы (binding_key), занятые активным подпрофилем
+        self.sub_off = set()         # aid, выключенные подпрофилем на прошлом шаге
         self.rep_start = {}          # aid -> начало автоповтора
         self.fresh = True            # первый шаг после сброса/смены профиля
         self.suppressed = set()      # зажаты в момент смены профиля: молчат до отпускания
@@ -1230,6 +1258,20 @@ class Mapper(object):
             self.layer = cur or 1          # для срабатывания действий считаем слоем 1
         else:
             self.layer = 0
+
+        def layer_ok(ca):
+            return not ly["enabled"] or ca["layer"] in (0, self.layer)
+        # подпрофиль включает действие «Подпрофиль» основного профиля, пока его вход активен
+        sub = next((ca["subprofile"] for ca in cfg["custom_actions"] if ca["mode"] == "subprofile"
+                    and not ca.get("sub") and custom_aid(ca) in held and layer_ok(ca)), "")
+        self.subprofile = sub
+        self.sub_keys = frozenset(binding_key(b) for ca in cfg["custom_actions"] if sub and ca.get("sub") == sub
+                                  and layer_ok(ca) for b in ca["bindings"] if b)
+
+        def sub_ok(ca):
+            if ca.get("sub"):
+                return ca["sub"] == sub
+            return ca["mode"] == "subprofile" or not any(binding_key(b) in self.sub_keys for b in ca["bindings"] if b)
         long_s = cfg["long_press_ms"] / 1000.0
         prof = cfg.get("profile_name")
         if prof != self.cyc_prof:
@@ -1244,7 +1286,7 @@ class Mapper(object):
             self.fresh = False
             for ca in cfg["custom_actions"]:
                 aid = custom_aid(ca)
-                if aid in held and (not ly["enabled"] or ca["layer"] in (0, self.layer)):
+                if aid in held and layer_ok(ca) and sub_ok(ca):
                     self.custom_prev.add(aid)
                     self.press_t[aid] = now
                     self.long_fired.add(aid)
@@ -1254,10 +1296,23 @@ class Mapper(object):
         live = set()
         raw_now = set()
         self.custom_cam = set()
+        sub_off = set()
         for ca in cfg["custom_actions"]:
             aid = custom_aid(ca)
             live.add(aid)
-            raw = aid in held and (not ly["enabled"] or ca["layer"] in (0, self.layer))
+            sok = sub_ok(ca)
+            if not sok:
+                sub_off.add(aid)
+                if aid not in self.sub_off:
+                    self.custom_prev.discard(aid)     # ушло в подпрофиль/из него — без «отпускания»
+            elif aid in self.sub_off and aid in held and layer_ok(ca):
+                # вход уже зажат при смене подпрофиля — как при смене профиля: молчит до отпускания
+                self.custom_prev.add(aid)
+                self.press_t[aid] = now
+                self.long_fired.add(aid)
+                self.suppressed.add(aid)
+                self.cyc_reset_done.add(aid)
+            raw = aid in held and layer_ok(ca) and sok
             if raw:
                 raw_now.add(aid)
             was = aid in self.custom_prev
@@ -1311,6 +1366,8 @@ class Mapper(object):
                         keys.update(ca["keys"])
                 else:
                     self.rep_start.pop(aid, None)
+            elif mode == "subprofile":
+                on = raw
             elif mode == "toggle":
                 if event:
                     self.toggled ^= {aid}
@@ -1394,6 +1451,7 @@ class Mapper(object):
         if self.tap_cur is not None:
             keys.update(self.tap_cur[0])
         self.custom_prev = raw_now
+        self.sub_off = sub_off
         self.toggled &= live
         for d in (self.press_t, self.tap_until, self.seq_start, self.rep_start, self.cyc_cur):
             for k in [k for k in d if k not in live]:
@@ -1478,6 +1536,9 @@ class Mapper(object):
         self.axis_active = new_axis_active
 
         custom_keys = self._custom(cfg, held, buttons, hats, axes, now, active)
+        if self.sub_keys:   # вход занят подпрофилем — встроенное действие на нём молчит
+            held = {a for a in held if a.startswith(CUSTOM_PREFIX) or not any(
+                binding_key(b) in self.sub_keys for b in cfg["bindings"].get(a) or () if b)}
         active.update(a for a in held if not a.startswith(CUSTOM_PREFIX))
 
         lt = rt = 0.0

@@ -578,6 +578,57 @@ def test_551_button_assignment_to_several_profiles(app):
     app.refresh_profiles()
 
 
+def test_560_subprofile_by_axis_and_overlay(app):
+    import x52_rsview as rv
+    app.create_profile("Подпр", "dcs")
+    mgr = rv.SubprofileManager(app, app.cfg)
+    mgr.new_sub("Выбор оружия")
+    mgr.icon.set("↻")
+    mgr.size.set("30")
+    mgr.color = "#ff0000"
+    mgr.save_sub()
+    assert mgr.prev.cget("text") == "Подпр - ↻ Выбор оружия"
+    mgr.destroy()
+    assert app.cfg["subprofiles"] == [{"name": "Выбор оружия", "icon": "↻", "size": 30, "color": "#ff0000"}]
+    off = {"enabled": False, "name": "", "kind": "key", "mods": [], "key": "", "repeat": False,
+           "repeat_ms": 100, "continuous": False, "seq": "", "profile": "", "special": False, "cam": "left"}
+    ax = rv.axis_binding(6, "+", 0.5)
+    app.rs.open_dialog(ax, cols={"single": dict(off, enabled=True, name="Оружие", kind="sub",
+                                                subprofile="Выбор оружия"), "long": off, "release": off})
+    app.rs.refresh()
+    app.rs.set_sub("Выбор оружия")
+    app.rs.open_dialog(rv.btn_binding(0), cols={"single": dict(off, enabled=True, name="След. оружие", key="Q"),
+                                                "long": off, "release": off})
+    assert rv.find_slots(app.cfg, rv.btn_binding(0), 0, "Выбор оружия")["single"]["keys"] == ["Q"]
+    app.rs.set_sub("")
+    app.glob["overlay"].update(enabled=True, mode="change", seconds=1)
+    was_on = app.worker.bridge_on
+    if not was_on:
+        app.toggle_bridge()
+    assert wait(app, lambda: app.worker.bridge_on)
+    app.nb.select(app.T_RS)
+    X52.axes[6] = 0.9
+    try:
+        assert wait(app, lambda: app.worker.mapper.subprofile == "Выбор оружия")
+        assert wait(app, lambda: app.overlay.text == "Подпр" and app.overlay.sub_lbl.winfo_manager() == "pack")
+        assert app.overlay.sub_lbl.cget("text").strip() == "- ↻ Выбор оружия"
+        assert app.overlay.sub_lbl.cget("fg") == "#ff0000"
+        assert wait(app, lambda: app.rs.cur_sub() == "Выбор оружия")         # плитки — за подпрофилем
+        pump(app, 1.3)
+        assert app.overlay.alpha > 0                                         # пока включён — не скрывается
+    finally:
+        X52.axes[6] = -1.0
+    assert wait(app, lambda: app.worker.mapper.subprofile == "" and app.rs.cur_sub() == "")
+    assert wait(app, lambda: app.overlay.sub_lbl.winfo_manager() == "")
+    app.glob["overlay"]["enabled"] = False
+    if not was_on:
+        app.toggle_bridge()
+        assert wait(app, lambda: not app.worker.bridge_on)
+    app.switch_profile("ACE COMBAT 8")
+    os.remove(app.L.profile_path("Подпр"))
+    app.refresh_profiles()
+
+
 def test_559_profile_cycle_copied_to_profiles(app):
     import x52_rsview as rv
     for n in ("Круг-1", "Круг-2", "Круг-3"):

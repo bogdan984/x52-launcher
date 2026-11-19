@@ -9,10 +9,10 @@
 
 import json
 import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import colorchooser, messagebox, simpledialog, ttk
 
 from x52_core import (ALL_KEYS, AXIS_ROLES, CUSTOM_PREFIX, DCS_CAM, DCS_CAM_LABEL, HAT8, HAT8_NAME, HAT8_ORDER,
-                      HOLD_DELAY_MAX_MS, MAX_STEPS, MODIFIER_KEYS, SEQ_CYCLE_RESET_MAX_MS, SEQ_CYCLE_RESET_MIN_MS, SEQ_MAX_DELAY_MS,
+                      HOLD_DELAY_MAX_MS, MAX_STEPS, MAX_SUBPROFILES, SUB_COLOR, SUB_ICONS, MODIFIER_KEYS, SEQ_CYCLE_RESET_MAX_MS, SEQ_CYCLE_RESET_MIN_MS, SEQ_MAX_DELAY_MS,
                       action_steps, analog_axis, binding_text, clean_steps, find_custom, key_text, keys_text, new_custom_id,
                       sanitize_config)
 
@@ -101,10 +101,10 @@ def slot_of(ca):
     return {"press": "single", "short": "single", "long": "long", "release": "release"}[ca["trigger"]]
 
 
-def find_slots(cfg, b, layer=0):
+def find_slots(cfg, b, layer=0, sub=""):
     out = {}
     for ca in cfg["custom_actions"]:
-        if any(same_input(x, b) for x in ca["bindings"]) and ca["layer"] == layer:
+        if any(same_input(x, b) for x in ca["bindings"]) and ca["layer"] == layer and ca.get("sub", "") == sub:
             out.setdefault(slot_of(ca), ca)
     return out
 
@@ -116,7 +116,8 @@ def column_from_ca(ca, cfg=None):
            "cam": ca.get("cam", "left"), "seq_hold": bool(ca.get("seq_hold")),
            "cycle_steps": [], "cycle_hold_ms": 100, "seq_cycle_reset": ca.get("seq_cycle_reset", True),
            "seq_cycle_reset_ms": ca.get("seq_cycle_reset_ms", 1000),
-           "seq_cycle_profile_reset": ca.get("seq_cycle_profile_reset", True), "hold_delay_ms": 1000}
+           "seq_cycle_profile_reset": ca.get("seq_cycle_profile_reset", True), "hold_delay_ms": 1000,
+           "subprofile": ca.get("subprofile", "")}
     m = ca["mode"]
     if m == "sequence" and ca.get("seq_cycle"):
         # перебор по кругу: шаги — прямо в окне (сделанный из библиотечной последовательности — её копия)
@@ -126,6 +127,8 @@ def column_from_ca(ca, cfg=None):
         col["cycle_hold_ms"] = steps[0]["duration_ms"] if steps else 100
     elif m == "camera":
         col["kind"] = "cam"
+    elif m == "subprofile":
+        col["kind"] = "sub"
     elif m == "profile":
         col["kind"] = "profile"
         pt = ca["profile"]
@@ -161,8 +164,11 @@ def ca_fields(col, slot, long_on):
          "seq_cycle_reset": bool(col.get("seq_cycle_reset", True)),
          "seq_cycle_reset_ms": col.get("seq_cycle_reset_ms", 1000),
          "seq_cycle_profile_reset": bool(col.get("seq_cycle_profile_reset", True)),
-         "profile": {"kind": "cycle", "names": []}}
-    if col["kind"] == "profile":
+         "profile": {"kind": "cycle", "names": []}, "subprofile": ""}
+    if col["kind"] == "sub":
+        f["mode"] = "subprofile"
+        f["subprofile"] = col.get("subprofile", "")
+    elif col["kind"] == "profile":
         f["mode"] = "profile"
         p = col.get("profile")
         f["profile"] = ({"kind": "next", "names": []} if p == NEXT_P else
@@ -200,12 +206,14 @@ def column_problem(col):
         return "выберите последовательность (меню «Последовательности»)"
     if col["kind"] == "profile" and not col.get("profile"):
         return "выберите профиль"
+    if col["kind"] == "sub" and not col.get("subprofile"):
+        return "выберите подпрофиль (кнопка «Подпрофили…» над плитками)"
     return None
 
 
-def apply_slots(cfg, b, layer, cols):
-    """Записать три колонки окна в «свои действия» профиля для входа b."""
-    have = find_slots(cfg, b, layer)
+def apply_slots(cfg, b, layer, cols, sub=""):
+    """Записать три колонки окна в «свои действия» профиля для входа b (sub — в подпрофиле)."""
+    have = find_slots(cfg, b, layer, sub)
     long_on = bool(cols["long"].get("enabled"))
     for slot in SLOTS:
         col, ca = cols[slot], have.get(slot)
@@ -223,12 +231,13 @@ def apply_slots(cfg, b, layer, cols):
             continue
         f = ca_fields(col, slot, long_on)
         if ca is None:
-            ca = {"id": new_custom_id(cfg), "layer": layer, "bindings": [dict(b), None]}
+            ca = {"id": new_custom_id(cfg), "layer": layer, "sub": sub, "bindings": [dict(b), None]}
             cfg["custom_actions"].append(ca)
         ca.update(f)
         tmp = sanitize_config(dict(cfg, custom_actions=[ca]))["custom_actions"][0]
         for k in ("name", "keys", "mode", "trigger", "repeat_ms", "seq", "seq_hold", "seq_cycle", "seq_cycle_reset",
-                  "seq_cycle_reset_ms", "seq_cycle_profile_reset", "hold_delay_ms", "profile", "steps", "cam"):
+                  "seq_cycle_reset_ms", "seq_cycle_profile_reset", "hold_delay_ms", "profile", "steps", "cam",
+                  "subprofile"):
             ca[k] = tmp[k]
 
 
@@ -241,7 +250,8 @@ def ca_signature(ca):
     return json.dumps([ca["mode"], ca["keys"], ca["trigger"], ca.get("seq", ""), ca["profile"],
                        ca.get("cam", "left"), ca["repeat_ms"], ca["steps"], bool(ca.get("seq_hold")),
                        bool(ca.get("seq_cycle")), ca.get("seq_cycle_reset", True), ca.get("seq_cycle_reset_ms", 1000),
-                       ca.get("seq_cycle_profile_reset", True), ca.get("hold_delay_ms", 0)],
+                       ca.get("seq_cycle_profile_reset", True), ca.get("hold_delay_ms", 0),
+                       ca.get("subprofile", "")],
                       sort_keys=True)
 
 
@@ -250,7 +260,7 @@ def profiles_with(cfg, ca, b, others):
     sig, slot = ca_signature(ca), slot_of(ca)
     out = [cfg.get("profile_name") or "?"]
     for name, c in others:
-        o = find_slots(c, b, ca["layer"]).get(slot)
+        o = find_slots(c, b, ca["layer"], ca.get("sub", "")).get(slot)
         if o is not None and ca_signature(o) == sig:
             out.append(name)
     return out
@@ -280,6 +290,9 @@ def mapped_rows(cfg, device, others=()):
                         seq = " → ".join(keys_text(st["keys"]) for st in ca["steps"])
             elif m == "camera":
                 key = "Обзор DCS: " + DCS_CAM_LABEL.get(ca.get("cam"), "?")
+            elif m == "subprofile":
+                key = "Подпрофиль: " + (ca.get("subprofile") or "?")
+                rep = "пока активен"
             else:
                 key = keys_text(ca["keys"])
                 if m == "repeat":
@@ -291,6 +304,8 @@ def mapped_rows(cfg, device, others=()):
             trig = TRIG_TEXT[ca["trigger"]]
             if cfg["layers"]["enabled"] and ca["layer"]:
                 trig += " · слой %d" % ca["layer"]
+            if ca.get("sub"):
+                trig += " · подпр. «%s»" % ca["sub"]
             name = input_name(cfg, b)
             profs = ", ".join(profiles_with(cfg, ca, b, others))
             rows.append((CUSTOM_PREFIX + ca["id"], b,
@@ -451,7 +466,7 @@ class AxisTile(tk.LabelFrame):
         pts = (44, 8, 18, 15, 44, 22) if d == "-" else (12, 8, 38, 15, 12, 22)
         cv.create_polygon(pts, fill="#22b14c" if on else "#ffffff", outline="#222", width=2)
 
-    def refresh(self, cfg, layer):
+    def refresh(self, cfg, layer, sub=""):
         self.configure(text="%s  (ось %d)" % (axis_name(cfg, self.i), self.i + 1))
         roles = axis_roles(cfg, self.i)
         if roles:
@@ -462,7 +477,7 @@ class AxisTile(tk.LabelFrame):
             self.warn.configure(text="")
             self.off_btn.pack_forget()
         for d, c in self.dirs.items():
-            c["marks"].set(find_slots(cfg, self._binding(d), layer))
+            c["marks"].set(find_slots(cfg, self._binding(d), layer, sub))
             t = axis_thr(cfg, self.i, d)
             c["thr"].configure(text=("− : ≤ %+.2f" if d == "-" else "+ : ≥ %+.2f") % t)
         self._v = None
@@ -493,7 +508,7 @@ class AxisTile(tk.LabelFrame):
 # окно «Выбор срабатывающего действия»
 # ----------------------------------------------------------------------
 class ActionColumn(tk.Frame):
-    def __init__(self, master, slot, sequences, profiles, pick_key, edit_seqs=None):
+    def __init__(self, master, slot, sequences, profiles, pick_key, edit_seqs=None, subprofiles=None):
         super().__init__(master)
         self.pick_key = pick_key
         self.en = tk.BooleanVar(value=False)
@@ -598,6 +613,14 @@ class ActionColumn(tk.Frame):
             "Нужен виртуальный геймпад (вкладка «Главная»). В DCS правый стик назначьте на "
             "«Камера в кабине, горизонталь (абсолют)» и «… вертикаль (абсолют)».")
             ).pack(anchor="w", padx=4, pady=(2, 4))
+        self.subp = ttk.Combobox(b)          # не показан: в этой колонке подпрофиля нет
+        if subprofiles is not None:          # только «при нажатии» в основном профиле
+            gb = ttk.Frame(b)
+            gb.pack(fill="x", pady=(6, 0))
+            ttk.Radiobutton(gb, text="Подпрофиль:", variable=self.kind, value="sub",
+                            command=self._state).pack(side="left")
+            self.subp = ttk.Combobox(gb, state="readonly", width=22, values=list(subprofiles))
+            self.subp.pack(side="left", padx=4)
         self.special_lbl = ttk.Label(b, text="", foreground="#b45309", wraplength=180, justify="left")
         self.special_lbl.pack(anchor="w", pady=(6, 0))
         self.special = False
@@ -702,6 +725,7 @@ class ActionColumn(tk.Frame):
         self.cyc_prof.set(col.get("seq_cycle_profile_reset", True))
         self.prof.set(col.get("profile", ""))
         self.cam.set(DCS_CAM_LABEL.get(col.get("cam") or "left", ""))
+        self.subp.set(col.get("subprofile", ""))
         self.special_lbl.configure(text="Это действие настроено особо (переключатель / профили по кругу / свои "
                                         "шаги) — меняется на вкладке «Назначение»." if self.special else "")
         self._state()
@@ -733,12 +757,13 @@ class ActionColumn(tk.Frame):
                 "seq_hold": bool(self.seq_hold.get()), "cycle_steps": [list(k) for k in self.cycle_steps],
                 "cycle_hold_ms": hold, "seq_cycle_reset": bool(self.cyc_reset_on.get()),
                 "seq_cycle_reset_ms": cyc_ms, "seq_cycle_profile_reset": bool(self.cyc_prof.get()),
-                "profile": self.prof.get(),
+                "profile": self.prof.get(), "subprofile": self.subp.get(),
                 "cam": next((k for k, t, _p in DCS_CAM if t == self.cam.get()), "left")}
 
 
 class RsActionDialog(tk.Toplevel):
-    def __init__(self, master, title, cols, sequences, profiles, pick_key, share=None, edit_seqs=None):
+    def __init__(self, master, title, cols, sequences, profiles, pick_key, share=None, edit_seqs=None,
+                 subprofiles=None):
         super().__init__(master)
         self.title("Выбор срабатывающего действия — " + title)
         self._edit_seqs_cb = edit_seqs
@@ -751,7 +776,8 @@ class RsActionDialog(tk.Toplevel):
         self.cols = {}
         for i, s in enumerate(SLOTS):
             c = ActionColumn(body, s, sequences, profiles, pick_key,
-                             edit_seqs=self._edit_seqs if edit_seqs else None)
+                             edit_seqs=self._edit_seqs if edit_seqs else None,
+                             subprofiles=subprofiles if s == "single" else None)
             c.grid(row=0, column=i, sticky="n", padx=5)
             c.set(cols[s])
             self.cols[s] = c
@@ -761,7 +787,9 @@ class RsActionDialog(tk.Toplevel):
             "кнопку; без него — одно короткое нажатие. «Удержание» у последовательности — шаги идут, пока держите "
             "кнопку (или ось в заданном диапазоне); отпустили — оставшиеся шаги не выполняются. «Перебор по кругу» — "
             "каждое нажатие кнопки нажимает клавишу следующего шага (после последнего — снова первый); «+ шаг» — "
-            "нажмите клавишу на клавиатуре.")).pack(anchor="w", padx=10)
+            "нажмите клавишу на клавиатуре. «Подпрофиль» — пока ось (кнопка) в положении, кнопки подпрофиля "
+            "заменяют кнопки профиля; вернули — снова профиль (подпрофили — кнопка «Подпрофили…» над плитками)."
+            )).pack(anchor="w", padx=10)
         self.prof_vars = {}
         if share:                      # (все профили, текущий, где уже так же)
             names, cur, same = share
@@ -1061,8 +1089,167 @@ def _profile_ticks(frame, names, on, command):
     return out
 
 
+def sub_label(sp):
+    """Подпись подпрофиля в оверлее: значок + название."""
+    return (sp["icon"] + " " if sp.get("icon") else "") + sp["name"]
+
+
+class SubprofileManager(tk.Toplevel):
+    """Подпрофили текущего профиля: название, значок, цвет и высота букв в оверлее."""
+    NO_ICON = "(без значка)"
+
+    def __init__(self, app, cfg):
+        super().__init__(app)
+        self.app, self.cfg, self.changed = app, cfg, False
+        self.title("Подпрофили профиля «%s»" % cfg["profile_name"])
+        self.resizable(False, False)
+        self.transient(app)
+        left = ttk.Frame(self)
+        left.grid(row=0, column=0, sticky="ns", padx=8, pady=8)
+        self.lb = tk.Listbox(left, height=10, width=26, exportselection=False)
+        self.lb.pack()
+        self.lb.bind("<<ListboxSelect>>", lambda e: self._load())
+        bf = ttk.Frame(left)
+        bf.pack(fill="x", pady=(4, 0))
+        ttk.Button(bf, text="Новый", command=self.new_sub).pack(side="left")
+        ttk.Button(bf, text="Удалить", command=self.delete_sub).pack(side="left", padx=4)
+        ed = ttk.LabelFrame(self, text="Настройки подпрофиля")
+        ed.grid(row=0, column=1, sticky="n", padx=(0, 8), pady=8)
+        ttk.Label(ed, text="Название:").grid(row=0, column=0, sticky="w", padx=6, pady=3)
+        self.name = tk.StringVar()
+        ttk.Entry(ed, textvariable=self.name, width=24).grid(row=0, column=1, columnspan=2, sticky="w", padx=6)
+        ttk.Label(ed, text="Значок:").grid(row=1, column=0, sticky="w", padx=6, pady=3)
+        self.icon = ttk.Combobox(ed, state="readonly", width=12, font=("Segoe UI", 12),
+                                 values=[self.NO_ICON] + [i for i in SUB_ICONS if i])
+        self.icon.grid(row=1, column=1, sticky="w", padx=6)
+        self.icon.bind("<<ComboboxSelected>>", lambda e: self._preview())
+        ttk.Label(ed, text="Высота букв:").grid(row=2, column=0, sticky="w", padx=6, pady=3)
+        self.size = tk.StringVar(value="22")
+        sp = ttk.Spinbox(ed, from_=10, to=72, width=5, textvariable=self.size, command=self._preview)
+        sp.grid(row=2, column=1, sticky="w", padx=6)
+        sp.bind("<KeyRelease>", lambda e: self._preview())
+        ttk.Label(ed, text="Цвет:").grid(row=3, column=0, sticky="w", padx=6, pady=3)
+        self.color = SUB_COLOR
+        ttk.Button(ed, text="Цвет…", command=self._pick_color).grid(row=3, column=1, sticky="w", padx=6)
+        self.prev = tk.Label(ed, text="", bg="#202020", padx=8, pady=4, anchor="w")
+        self.prev.grid(row=4, column=0, columnspan=3, sticky="we", padx=6, pady=(6, 4))
+        self.name.trace_add("write", lambda *a: self._preview())
+        ttk.Button(ed, text="Сохранить", command=self.save_sub).grid(row=5, column=1, sticky="w", padx=6, pady=(2, 6))
+        ttk.Label(self, foreground="#555", wraplength=520, justify="left", text=(
+            "Подпрофиль включается действием «Подпрофиль» на оси (ползунок, крутилка…) или кнопке: «Карта "
+            "кнопок» → «Оси» → щёлкните направление → «Подпрофиль». Пока ось в положении, в оверлее видно "
+            "«Профиль - значок подпрофиль», а кнопки, назначенные в подпрофиле, работают по-новому; остальные — "
+            "как в профиле. Назначать кнопки подпрофиля: выберите его в поле «Назначения» над плитками.")
+            ).grid(row=1, column=0, columnspan=2, sticky="w", padx=8)
+        ttk.Button(self, text="Закрыть", command=self.destroy).grid(row=2, column=1, sticky="e", padx=8, pady=8)
+        self._refresh(0)
+        self.grab_set()
+
+    def _subs(self):
+        return self.cfg.setdefault("subprofiles", [])
+
+    def _sel(self):
+        s = self.lb.curselection()
+        return s[0] if s else None
+
+    def _refresh(self, sel=None):
+        self.lb.delete(0, "end")
+        for sp in self._subs():
+            self.lb.insert("end", sub_label(sp))
+        if sel is not None and 0 <= sel < len(self._subs()):
+            self.lb.selection_set(sel)
+        self._load()
+
+    def _load(self):
+        i = self._sel()
+        sp = self._subs()[i] if i is not None else {"name": "", "icon": "", "size": 22, "color": SUB_COLOR}
+        self.name.set(sp["name"])
+        self.icon.set(sp["icon"] or self.NO_ICON)
+        self.size.set(str(sp["size"]))
+        self.color = sp["color"]
+        self._preview()
+
+    def _fields(self):
+        try:
+            size = max(10, min(72, int(float(self.size.get()))))
+        except ValueError:
+            size = 22
+        ic = self.icon.get()
+        return {"name": self.name.get().strip()[:40], "icon": ic if ic in SUB_ICONS else "", "size": size,
+                "color": self.color}
+
+    def _preview(self):
+        f = self._fields()
+        self.prev.configure(text=("%s - %s" % (self.cfg["profile_name"], sub_label(f))) if f["name"] else "",
+                            fg=f["color"], font=("Segoe UI", min(f["size"], 28), "bold"))
+
+    def _pick_color(self):
+        c = colorchooser.askcolor(color=self.color, parent=self, title="Цвет подпрофиля")
+        if c and c[1]:
+            self.color = c[1]
+            self._preview()
+
+    def _name_ok(self, name, skip=None):
+        if not name:
+            messagebox.showwarning("Подпрофиль", "Введите название.", parent=self)
+            return False
+        if any(sp["name"] == name for i, sp in enumerate(self._subs()) if i != skip):
+            messagebox.showwarning("Подпрофиль", "Подпрофиль «%s» уже есть." % name, parent=self)
+            return False
+        return True
+
+    def new_sub(self, name=None):
+        if len(self._subs()) >= MAX_SUBPROFILES:
+            messagebox.showinfo("Подпрофиль", "Не больше %d подпрофилей." % MAX_SUBPROFILES, parent=self)
+            return
+        if name is None:
+            name = simpledialog.askstring("Новый подпрофиль", "Название (например «Выбор оружия»):", parent=self)
+            if name is None:
+                return
+        name = name.strip()[:40]
+        if not self._name_ok(name):
+            return
+        self._subs().append({"name": name, "icon": "", "size": 22, "color": SUB_COLOR})
+        self.changed = True
+        self._refresh(len(self._subs()) - 1)
+
+    def save_sub(self):
+        i = self._sel()
+        if i is None:
+            return
+        f = self._fields()
+        if not self._name_ok(f["name"], skip=i):
+            return
+        old = self._subs()[i]["name"]
+        if f["name"] != old:                 # переименование: и назначения, и действия «Подпрофиль»
+            for ca in self.cfg["custom_actions"]:
+                if ca.get("sub") == old:
+                    ca["sub"] = f["name"]
+                if ca.get("subprofile") == old:
+                    ca["subprofile"] = f["name"]
+        self._subs()[i] = f
+        self.changed = True
+        self._refresh(i)
+
+    def delete_sub(self, confirm=True):
+        i = self._sel()
+        if i is None:
+            return
+        name = self._subs()[i]["name"]
+        if confirm and not messagebox.askyesno(
+                "Подпрофиль", "Удалить подпрофиль «%s» и все назначения кнопок в нём?" % name, parent=self):
+            return
+        self.cfg["custom_actions"] = [ca for ca in self.cfg["custom_actions"] if ca.get("sub") != name]
+        for ca in self.cfg["custom_actions"]:
+            if ca.get("subprofile") == name:
+                ca["subprofile"] = ""
+        del self._subs()[i]
+        self.changed = True
+        self._refresh(min(i, len(self._subs()) - 1))
+
+
 class RsView(ttk.Frame):
-    COLS = (("type", "Тип", 70), ("device", "Устройство", 170), ("name", "Название действия", 150),
+    COLS =(("type", "Тип", 70), ("device", "Устройство", 170), ("name", "Название действия", 150),
             ("input", "Кнопка", 100), ("trig", "Срабатывание", 120), ("key", "Клавиша", 120),
             ("rep", "Повтор", 80), ("prof", "Новый профиль", 110), ("seq", "Последовательность", 120),
             ("profs", "Профили", 220))
@@ -1120,6 +1307,16 @@ class RsView(ttk.Frame):
         ttk.Checkbutton(self.layer_box, text="за колесом", variable=self.follow,
                         command=lambda: setattr(self, "_seen_layer", None)).pack(side="left")
         self._seen_layer = None
+        sb = ttk.Frame(right)
+        sb.pack(fill="x", pady=(0, 2))
+        ttk.Label(sb, text="Назначения:").pack(side="left")
+        self.sub = ttk.Combobox(sb, state="readonly", width=28)
+        self.sub.pack(side="left", padx=4)
+        self.sub.bind("<<ComboboxSelected>>", lambda e: self.refresh())
+        ttk.Button(sb, text="Подпрофили…", command=self.open_subprofiles).pack(side="left")
+        ttk.Label(sb, foreground="#555", text="(подпрофиль включается осью: «Оси» → направление → «Подпрофиль»)"
+                  ).pack(side="left", padx=6)
+        self._seen_sub = None
 
         self.nb = ttk.Notebook(right)
         self.nb.pack(fill="both", expand=True)
@@ -1540,6 +1737,33 @@ class RsView(ttk.Frame):
     def cur_layer(self):
         return self.layer.current() if self.app.cfg["layers"]["enabled"] else 0
 
+    # ---- подпрофиль, в котором редактируем ("" — сам профиль)
+    def cur_sub(self):
+        i = self.sub.current()
+        sps = self.app.cfg.get("subprofiles", [])
+        return sps[i - 1]["name"] if 0 < i <= len(sps) else ""
+
+    def set_sub(self, name):
+        names = [sp["name"] for sp in self.app.cfg.get("subprofiles", [])]
+        self.sub.current(names.index(name) + 1 if name in names else 0)
+
+    def _follow_sub(self):
+        """Включили подпрофиль осью — плитки показывают его назначения (выключили — снова профиль)."""
+        cur = self.app.worker.mapper.subprofile
+        if cur != self._seen_sub:
+            self._seen_sub = cur
+            if cur != self.cur_sub():
+                self.set_sub(cur)
+                self.refresh()
+
+    def open_subprofiles(self):
+        dlg = SubprofileManager(self.app, self.app.cfg)
+        self.app.wait_window(dlg)
+        if dlg.changed:
+            self.app.refresh_tree()
+            self.app.mark_dirty()
+            self.refresh()
+
     # ---- плитки
     def ensure_tiles(self, n_buttons, n_hats, n_axes=None):
         if n_axes is not None and len(self.axis_tiles) != n_axes:
@@ -1579,14 +1803,18 @@ class RsView(ttk.Frame):
         else:
             self.layer_box.pack_forget()
         layer = self.cur_layer()
+        sub = self.cur_sub()
+        self.sub.configure(values=["профиль «%s»" % cfg["profile_name"]] +
+                           ["подпрофиль «%s»" % sp["name"] for sp in cfg.get("subprofiles", [])])
+        self.set_sub(sub)
         for t in self.btn_tiles:
             t.name.configure(text=input_name(cfg, t.b))
-            t.marks.set(find_slots(cfg, t.b, layer))
+            t.marks.set(find_slots(cfg, t.b, layer, sub))
         for t in self.axis_tiles:
-            t.refresh(cfg, layer)
+            t.refresh(cfg, layer, sub)
         for h in self.hat_tiles:
             for d, c in h.cells.items():
-                c["marks"].set(find_slots(cfg, c["b"], layer))
+                c["marks"].set(find_slots(cfg, c["b"], layer, sub))
                 nm = cfg.get("button_names", {}).get(name_key(c["b"]))
                 c["frame"].configure(text=(HAT8_NAME[d] + (" · " + nm if nm else ""))[:16])
         self.acts.delete(*self.acts.get_children())
@@ -1624,6 +1852,7 @@ class RsView(ttk.Frame):
     def tick(self, state):
         self._refresh_devices()
         self._follow_layer()
+        self._follow_sub()
         btns, hats, axes = state["buttons"], state["hats"], state["axes"]
         if (len(self.btn_tiles) != len(btns) or len(self.hat_tiles) != len(hats)
                 or len(self.axis_tiles) != len(axes)):
@@ -1668,6 +1897,8 @@ class RsView(ttk.Frame):
             ca = find_custom(self.app.cfg, aid)
             if ca and self.app.cfg["layers"]["enabled"]:
                 self.layer.current(ca["layer"])
+            if ca:
+                self.set_sub(ca.get("sub", ""))
             self.open_dialog(b)
 
     def open_dialog(self, b, cols=None, profiles=None):
@@ -1676,8 +1907,9 @@ class RsView(ttk.Frame):
         if app.learn or app.grab_current() is not None:
             return
         layer = self.cur_layer()
-        same = app.rs_profiles_same(b, layer)
-        have = find_slots(app.cfg, b, layer)
+        sub = self.cur_sub()
+        same = app.rs_profiles_same(b, layer) if not sub else []
+        have = find_slots(app.cfg, b, layer, sub)
         start = {s: (column_from_ca(have[s], app.cfg) if s in have else
                      {"enabled": False, "name": "", "kind": "key", "mods": [], "key": "", "repeat": False,
                       "repeat_ms": 100, "continuous": False, "seq": "", "profile": "", "special": False,
@@ -1686,16 +1918,20 @@ class RsView(ttk.Frame):
         if cols is None:
             title = input_name(app.cfg, b) + ("" if not app.cfg["layers"]["enabled"] else
                                               " (%s)" % self.layer.get())
+            if sub:
+                title += " — подпрофиль «%s»" % sub
+            # подпрофиль есть только в этом профиле — в другие профили не копируем
             share = ((app._all_profile_names(), app.cfg["profile_name"], same)
-                     if app.glob.get("profile_select", True) else None)
+                     if app.glob.get("profile_select", True) and not sub else None)
             dlg = RsActionDialog(app, title, start, [s["name"] for s in app.cfg["sequences"]],
                                  app._all_profile_names(), self.pick_key, share=share,
-                                 edit_seqs=self.edit_sequences)
+                                 edit_seqs=self.edit_sequences,
+                                 subprofiles=None if sub else [sp["name"] for sp in app.cfg.get("subprofiles", [])])
             app.wait_window(dlg)
             cols, profiles = dlg.result, (dlg.profiles if share else None)   # без блока — другие не трогать
         if not cols:
             return
-        apply_slots(app.cfg, b, layer, cols)
+        apply_slots(app.cfg, b, layer, cols, sub)
         app.refresh_tree()
         app.mark_dirty()
         done = app.rs_apply_to_profiles(b, layer, cols, set(profiles or ()), set(same) - set(profiles or ())

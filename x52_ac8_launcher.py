@@ -83,7 +83,7 @@ from x52_core import (  # noqa: E402
 import x52_ministick  # noqa: E402
 
 APP_NAME = "X52 Launcher"
-APP_VERSION = "5.5.32"
+APP_VERSION = "5.6.0"
 # Собранный exe (PyInstaller): программа в Program Files (только чтение), настройки — в %APPDATA%.
 FROZEN = bool(getattr(sys, "frozen", False))
 APP_DIR = os.path.dirname(sys.executable if FROZEN else os.path.abspath(__file__))
@@ -186,7 +186,10 @@ class GameOverlay(object):
             pass
         self.lbl = tk.Label(self.win, text="", bg=self.KEY, fg="#33ff99", font=("Segoe UI", 22, "bold"),
                             padx=10, pady=4)
-        self.lbl.pack()
+        self.lbl.pack(side="left")
+        # приписка подпрофиля: свой цвет и высота букв
+        self.sub_lbl = tk.Label(self.win, text="", bg=self.KEY, fg="#ffcc33", font=("Segoe UI", 22, "bold"),
+                                padx=0, pady=4)
         self.alpha = 0.0
         self._set_alpha(0.0)
         try:
@@ -239,12 +242,19 @@ class GameOverlay(object):
         except tk.TclError:
             pass
 
-    def show(self, text, o, sticky):
+    def show(self, text, o, sticky, sub=None):
+        """sub — активный подпрофиль {name, icon, color, size}: справа «- значок название»."""
         if self._hide_job:
             self.root.after_cancel(self._hide_job)
             self._hide_job = None
         self.text = text
         self.lbl.configure(text=text, fg=o["color"], font=("Segoe UI", o["size"], "bold"))
+        if sub:
+            self.sub_lbl.configure(text="- " + x52_rsview.sub_label(sub) + " ", fg=sub["color"],
+                                   font=("Segoe UI", sub["size"], "bold"))
+            self.sub_lbl.pack(side="left")
+        else:
+            self.sub_lbl.pack_forget()
         self.win.update_idletasks()
         w, h = self.win.winfo_reqwidth(), self.win.winfo_reqheight()
         sw, sh = self.win.winfo_screenwidth(), self.win.winfo_screenheight()
@@ -3610,6 +3620,11 @@ class App(tk.Tk):
             t += f"  ·  слой {m.layer or 1}" if m.layer_known else "  ·  слой ?"
         return t
 
+    def overlay_sub(self):
+        """Активный подпрофиль (его настройки) или None."""
+        name = self.worker.mapper.subprofile
+        return next((sp for sp in self.cfg.get("subprofiles", []) if sp["name"] == name), None) if name else None
+
     def overlay_update(self, changed=True, force=False):
         o = self.glob["overlay"]
         if not o["enabled"]:
@@ -3619,15 +3634,17 @@ class App(tk.Tk):
         if self.overlay is None:
             return
         text = self.overlay_text()
-        if o["mode"] == "always":
-            self.overlay.show(text, o, sticky=True)
+        sub = self.overlay_sub()
+        if o["mode"] == "always" or sub:     # подпрофиль виден всё время, пока включён
+            self.overlay.show(text, o, sticky=True, sub=sub)
         elif changed or force:
             self.overlay.show(text, o, sticky=False)
 
     def _overlay_tick(self):
         """Смена профиля/слоя -> оверлей; раз в 3 с вернуть его поверх игры."""
         m = self.worker.mapper
-        key = (self.cfg["profile_name"], (m.layer, m.layer_known) if self.cfg["layers"]["enabled"] else 0)
+        key = (self.cfg["profile_name"], (m.layer, m.layer_known) if self.cfg["layers"]["enabled"] else 0,
+               m.subprofile)
         if key != self._ov_key:
             first = self._ov_key is None
             self._ov_key = key
@@ -5022,7 +5039,7 @@ class App(tk.Tk):
         if not aid or aid in INTERNAL_ACTIONS:
             return
         ca = find_custom(self.cfg, aid)
-        if ca is not None and ca["mode"] in ("sequence", "profile", "camera"):
+        if ca is not None and ca["mode"] in ("sequence", "profile", "camera", "subprofile"):
             self.custom_edit()
             return
         if ca is not None:
@@ -5086,6 +5103,10 @@ class App(tk.Tk):
         ca = find_custom(self.cfg, aid) if aid else None
         if ca is None:
             messagebox.showinfo("Своё действие", "Выберите своё действие в группе «Свои действия».")
+            return
+        if data is None and ca["mode"] == "subprofile":
+            messagebox.showinfo("Своё действие", "Действие «Подпрофиль» меняется на «Карте кнопок» "
+                                                 "(вкладка «Оси» → щёлкните направление оси).")
             return
         if data is None:
             dlg = CustomActionDialog(self, "Изменить действие", ca, self.cfg["long_press_ms"],
