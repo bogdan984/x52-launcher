@@ -29,6 +29,16 @@ PLAIN_KEYS = [k for k in ALL_KEYS if k not in MODIFIER_KEYS]
 MOD_LABEL = {"LCTRL": "LCtrl", "LSHIFT": "LShift", "LALT": "LAlt", "RCTRL": "RCtrl", "RSHIFT": "RShift",
              "RALT": "RAlt"}
 TILE_BG = "#ffffff"
+# обычные названия кнопок Saitek/Logitech X52 (номер кнопки Windows -> подпись на джойстике)
+X52_BTN_NAMES = {1: "курок, 1-я ступень", 2: "Fire (красная, под крышкой)", 3: "Fire A", 4: "Fire B",
+                 5: "Fire C (РУД)", 6: "мизинец (Pinkie)", 7: "Fire D (РУД)", 8: "Fire E (РУД)",
+                 9: "T1", 10: "T2", 11: "T3", 12: "T4", 13: "T5", 14: "T6", 15: "курок, 2-я ступень",
+                 16: "хатка 2 вверх", 17: "хатка 2 вправо", 18: "хатка 2 вниз", 19: "хатка 2 влево",
+                 20: "хатка РУД вверх", 21: "хатка РУД вправо", 22: "хатка РУД вниз", 23: "хатка РУД влево",
+                 24: "колесо режимов 1", 25: "колесо режимов 2", 26: "колесо режимов 3",
+                 27: "Function (MFD)", 28: "Start/Stop (MFD)", 29: "Reset (MFD)", 30: "i (Clutch)",
+                 31: "мышь РУД: левая", 32: "колёсико РУД: нажатие", 33: "колёсико РУД: вниз",
+                 34: "колёсико РУД: вверх"}
 ARROW8 = {"n": "↑", "ne": "↗", "e": "→", "se": "↘", "s": "↓", "sw": "↙", "w": "←", "nw": "↖"}
 
 
@@ -1123,11 +1133,13 @@ class SubprofileManager(tk.Toplevel):
     приписки в оверлее и кнопки X52, которые в подпрофиле работают по-другому."""
     NO_ICON = "(без значка)"
 
-    def __init__(self, app, cfg, view=None):
-        super().__init__(app)
-        self.app, self.cfg, self.view, self.changed = app, cfg, view, False
+    def __init__(self, master, cfg, view=None):
+        super().__init__(master)
+        # master — окно, поверх которого открыто (может быть окно оси); джойстик — у главного окна
+        self.app = view.app if view is not None else master
+        self.cfg, self.view, self.changed = cfg, view, False
         self.title("Подпрофили профиля «%s»" % cfg["profile_name"])
-        self.transient(app)
+        self.transient(master)
         left = ttk.LabelFrame(self, text="Подпрофили")
         left.pack(side="left", fill="y", padx=6, pady=6)
         self.lb = tk.Listbox(left, width=26, height=18, exportselection=False)
@@ -1147,7 +1159,7 @@ class SubprofileManager(tk.Toplevel):
         self.name = tk.StringVar()
         ttk.Entry(ov, textvariable=self.name, width=24).grid(row=0, column=1, sticky="w")
         ttk.Label(ov, text="Значок:").grid(row=0, column=2, sticky="w", padx=(10, 4))
-        self.icon = ttk.Combobox(ov, state="readonly", width=11, font=("Segoe UI", 12),
+        self.icon = ttk.Combobox(ov, state="readonly", width=14,
                                  values=[self.NO_ICON] + [i for i in SUB_ICONS if i])
         self.icon.grid(row=0, column=3, sticky="w")
         ttk.Label(ov, text="Высота букв:").grid(row=1, column=0, sticky="w", padx=4, pady=2)
@@ -1171,7 +1183,7 @@ class SubprofileManager(tk.Toplevel):
         bx.pack(fill="both", expand=True, pady=(6, 0))
         cols = ("input", "name", "key", "mode")
         self.tv = ttk.Treeview(bx, columns=cols, show="headings", height=7, selectmode="browse")
-        for c, t, w in zip(cols, ("Кнопка X52", "Название", "Клавиша / действие", "Режим"), (130, 120, 200, 110)):
+        for c, t, w in zip(cols, ("Кнопка X52", "Название", "Клавиша / действие", "Режим"), (230, 110, 170, 100)):
             self.tv.heading(c, text=t)
             self.tv.column(c, width=w)
         self.tv.pack(fill="both", expand=True, padx=6, pady=6)
@@ -1181,10 +1193,12 @@ class SubprofileManager(tk.Toplevel):
         ed.pack(fill="x", padx=6, pady=(0, 6))
         ttk.Label(ed, text="Кнопка X52:").grid(row=0, column=0, sticky="w", padx=4)
         self.inputs = self._all_inputs()
-        self.inp = ttk.Combobox(ed, state="readonly", width=24, values=[t for t, _b in self.inputs])
-        self.inp.grid(row=0, column=1, columnspan=3, sticky="w")
+        self.inp = ttk.Combobox(ed, state="readonly", width=40, height=20, values=[t for t, _b in self.inputs])
+        self.inp.grid(row=0, column=1, columnspan=4, sticky="w")
         self.press_btn = ttk.Button(ed, text="Нажать на X52…", command=self._wait_press)
-        self.press_btn.grid(row=0, column=4, sticky="w", padx=4)
+        self.press_btn.grid(row=0, column=5, sticky="w", padx=4)
+        self.now_lbl = ttk.Label(ed, text="", foreground="#1d4ed8")
+        self.now_lbl.grid(row=7, column=0, columnspan=6, sticky="w", padx=4)
         ttk.Label(ed, text="Название:").grid(row=1, column=0, sticky="w", padx=4)
         self.b_name = tk.StringVar()
         ttk.Entry(ed, textvariable=self.b_name, width=24).grid(row=1, column=1, columnspan=3, sticky="w")
@@ -1223,7 +1237,9 @@ class SubprofileManager(tk.Toplevel):
             ttk.Button(be, text="Другие действия…", command=self.more_btn).pack(side="left", padx=(12, 0))
         ttk.Button(self, text="Закрыть", command=self.destroy).pack(side="bottom", anchor="e", padx=6, pady=6)
         self._press_job = None
+        self._live_job = None
         self.bind("<Destroy>", lambda e: e.widget is self and self._stop_press())
+        self._live()
         self._refresh(0)
         self.grab_set()
 
@@ -1340,10 +1356,22 @@ class SubprofileManager(tk.Toplevel):
         self._refresh(min(i, len(self._subs()) - 1))
 
     # ---- кнопки подпрофиля
+    def _state(self):
+        return getattr(getattr(self.app, "worker", None), "state", None) or {}
+
+    def _input_text(self, b):
+        """«Кнопка 3 — Fire A», плюс своё название с плитки, если задано."""
+        if b["type"] != "button":
+            return input_name(self.cfg, b)
+        t = binding_text(b)
+        typ = X52_BTN_NAMES.get(b["index"] + 1)
+        own = self.cfg.get("button_names", {}).get(name_key(b))
+        return t + "".join(" — " + x for x in (typ, own and "«%s»" % own) if x)
+
     def _all_inputs(self):
-        st = getattr(getattr(self.app, "worker", None), "state", None) or {}
+        st = self._state()
         nb, nh = len(st.get("buttons") or ()) or 32, len(st.get("hats") or ()) or 1
-        out = [(input_name(self.cfg, btn_binding(i)), btn_binding(i)) for i in range(nb)]
+        out = [(self._input_text(btn_binding(i)), btn_binding(i)) for i in range(nb)]
         for h in range(nh):
             for d in HAT8:
                 out.append(("Хатка %d %s %s" % (h + 1, ARROW8[d], HAT8_NAME[d]), hat_binding(h, d)))
@@ -1382,7 +1410,7 @@ class SubprofileManager(tk.Toplevel):
                 if len(slots) > 1:
                     mode += " +%s" % "/".join(SLOT_SHORT[s] for s in SLOTS if s in slots and s != "single")
                 iid = "s%d" % len(self._rows)
-                self.tv.insert("", "end", iid=iid, values=(input_name(self.cfg, b), one["name"], key, mode))
+                self.tv.insert("", "end", iid=iid, values=(self._input_text(b), one["name"], key, mode))
                 self._rows[iid] = b
                 if select is not None and same_input(b, select):
                     self.tv.selection_set(iid)
@@ -1418,13 +1446,38 @@ class SubprofileManager(tk.Toplevel):
             if rest:
                 self.key.set(key_text(rest[0]))
 
+    def _pressed_now(self):
+        """Что сейчас нажато на X52 (кнопки и хатки)."""
+        st = self._state()
+        out = [btn_binding(i) for i, v in enumerate(st.get("buttons") or ()) if v]
+        for hi, (x, y) in enumerate(st.get("hats") or ()):
+            sx, sy = (x > 0) - (x < 0), (y > 0) - (y < 0)
+            if sx or sy:
+                out.append(hat_binding(hi, next(k for k, v in HAT8.items() if v == (sx, sy))))
+        return out
+
+    def _live(self):
+        """Строка «Сейчас нажата: …» — видно, какая кнопка X52 какая."""
+        self._live_job = None
+        if not self._state().get("name"):
+            t = "X52 не виден программе — проверьте вкладку «Главная»."
+        else:
+            now = self._pressed_now()
+            t = ("Сейчас нажата на X52: " + ", ".join(self._input_text(b) for b in now) if now else
+                 "Нажмите кнопку на X52 — здесь будет видно её номер и название.")
+        if self.now_lbl.cget("text") != t:
+            self.now_lbl.configure(text=t)
+        self._live_job = self.after(100, self._live)
+
     def _wait_press(self):
         """Ждём нажатия кнопки/хатки X52 (до 10 с) и выбираем её в поле «Кнопка X52»."""
-        st = getattr(getattr(self.app, "worker", None), "state", None)
-        if not st or not st.get("name"):
+        st = self._state()
+        if not st.get("name"):
             messagebox.showinfo("Подпрофиль", "X52 не найден — выберите кнопку из списка.", parent=self)
             return
-        self._stop_press()
+        if self._press_job:                     # второй щелчок — ждём заново
+            self.after_cancel(self._press_job)
+            self._press_job = None
         b0, h0 = list(st["buttons"]), list(st["hats"])
         self.press_btn.configure(text="Нажмите кнопку…")
         end = time.time() + 10
@@ -1456,9 +1509,10 @@ class SubprofileManager(tk.Toplevel):
             self.b_name.set(input_name(self.cfg, b))
 
     def _stop_press(self):
-        if self._press_job:
-            self.after_cancel(self._press_job)
-            self._press_job = None
+        for j in ("_press_job", "_live_job"):
+            if getattr(self, j, None):
+                self.after_cancel(getattr(self, j))
+                setattr(self, j, None)
 
     def _editor_col(self):
         names = [key_text(k) for k in PLAIN_KEYS]

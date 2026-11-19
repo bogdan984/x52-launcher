@@ -581,7 +581,9 @@ def test_551_button_assignment_to_several_profiles(app):
 def test_560_subprofile_by_axis_and_overlay(app):
     import x52_rsview as rv
     app.create_profile("Подпр", "dcs")
-    mgr = rv.SubprofileManager(app, app.cfg, view=app.rs)
+    top = __import__("tkinter").Toplevel(app)                                   # как из окна оси: поверх другого окна
+    mgr = rv.SubprofileManager(top, app.cfg, view=app.rs)
+    assert mgr.app is app
     assert "Новый" in mgr.warn.cget("text")                    # пусто — подсказка
     mgr.new_sub("Выбор оружия")
     mgr.icon.set("↻")
@@ -592,9 +594,11 @@ def test_560_subprofile_by_axis_and_overlay(app):
     assert mgr.prev.cget("text") == "Подпр - ↻ Выбор оружия"
     assert app.cfg["subprofiles"] == [{"name": "Выбор оружия", "icon": "↻", "size": 30, "color": "#ff0000"}]
     # кнопка подпрофиля — как шаг последовательности: кнопка X52, модификатор, клавиша, «Добавить»
+    assert wait(app, lambda: "Нажмите кнопку на X52" in mgr.now_lbl.cget("text"))
     mgr._wait_press()
     X52.buttons[3] = 1
-    assert wait(app, lambda: mgr.inp.get() == rv.input_name(app.cfg, rv.btn_binding(3)))
+    assert wait(app, lambda: mgr.inp.get() == "Кнопка 4 — Fire B")
+    assert wait(app, lambda: "Сейчас нажата на X52: Кнопка 4 — Fire B" in mgr.now_lbl.cget("text"))
     X52.buttons[3] = 0
     mgr.mods["LSHIFT"].set(True)
     mgr.key.set(core.key_text("Q"))
@@ -616,6 +620,7 @@ def test_560_subprofile_by_axis_and_overlay(app):
     mgr.delete_sub(confirm=False)
     assert [sp["name"] for sp in app.cfg["subprofiles"]] == ["Выбор оружия"]
     mgr.destroy()
+    top.destroy()
     off = {"enabled": False, "name": "", "kind": "key", "mods": [], "key": "", "repeat": False,
            "repeat_ms": 100, "continuous": False, "seq": "", "profile": "", "special": False, "cam": "left"}
     ax = rv.axis_binding(6, "+", 0.5)
