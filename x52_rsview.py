@@ -508,7 +508,8 @@ class AxisTile(tk.LabelFrame):
 # окно «Выбор срабатывающего действия»
 # ----------------------------------------------------------------------
 class ActionColumn(tk.Frame):
-    def __init__(self, master, slot, sequences, profiles, pick_key, edit_seqs=None, subprofiles=None):
+    def __init__(self, master, slot, sequences, profiles, pick_key, edit_seqs=None, subprofiles=None,
+                 edit_subs=None):
         super().__init__(master)
         self.pick_key = pick_key
         self.en = tk.BooleanVar(value=False)
@@ -621,6 +622,11 @@ class ActionColumn(tk.Frame):
                             command=self._state).pack(side="left")
             self.subp = ttk.Combobox(gb, state="readonly", width=22, values=list(subprofiles))
             self.subp.pack(side="left", padx=4)
+            if edit_subs:
+                gr = ttk.Frame(b)
+                gr.pack(fill="x")
+                ttk.Button(gr, text="Создать / изменить подпрофиль…", command=lambda: edit_subs(self)).pack(
+                    side="left", padx=(22, 0), pady=(2, 0))
         self.special_lbl = ttk.Label(b, text="", foreground="#b45309", wraplength=180, justify="left")
         self.special_lbl.pack(anchor="w", pady=(6, 0))
         self.special = False
@@ -763,10 +769,11 @@ class ActionColumn(tk.Frame):
 
 class RsActionDialog(tk.Toplevel):
     def __init__(self, master, title, cols, sequences, profiles, pick_key, share=None, edit_seqs=None,
-                 subprofiles=None):
+                 subprofiles=None, edit_subs=None):
         super().__init__(master)
         self.title("Выбор срабатывающего действия — " + title)
         self._edit_seqs_cb = edit_seqs
+        self._edit_subs_cb = edit_subs
         self.profiles = None
         self.resizable(False, False)
         self.transient(master)
@@ -777,7 +784,8 @@ class RsActionDialog(tk.Toplevel):
         for i, s in enumerate(SLOTS):
             c = ActionColumn(body, s, sequences, profiles, pick_key,
                              edit_seqs=self._edit_seqs if edit_seqs else None,
-                             subprofiles=subprofiles if s == "single" else None)
+                             subprofiles=subprofiles if s == "single" else None,
+                             edit_subs=self._edit_subs if edit_subs else None)
             c.grid(row=0, column=i, sticky="n", padx=5)
             c.set(cols[s])
             self.cols[s] = c
@@ -831,6 +839,20 @@ class RsActionDialog(tk.Toplevel):
         if new:
             col.seq.set(new[-1])
             col.kind.set("seq")
+
+    def _edit_subs(self, col):
+        """Окно подпрофилей прямо из колонки; новый подпрофиль сразу выбран."""
+        before = list(col.subp.cget("values"))
+        names = self._edit_subs_cb()
+        col.subp.configure(values=names)
+        if col.subp.get() not in names:
+            col.subp.set("")
+        new = [n for n in names if n not in before]
+        if new:
+            col.subp.set(new[-1])
+        if col.subp.get():
+            col.kind.set("sub")
+            col._state()
 
     def _ok(self):
         cols = {s: c.get() for s, c in self.cols.items()}
@@ -1756,6 +1778,21 @@ class RsView(ttk.Frame):
                 self.set_sub(cur)
                 self.refresh()
 
+    def edit_subprofiles(self):
+        """«Подпрофили» поверх окна назначения (модально); возвращает имена."""
+        owner = self.app.grab_current()
+        dlg = SubprofileManager(owner or self.app, self.app.cfg)
+        self.app.wait_window(dlg)
+        if owner is not None and owner is not self.app:
+            try:
+                owner.grab_set()
+            except tk.TclError:
+                pass
+        if dlg.changed:
+            self.app.refresh_tree()
+            self.app.mark_dirty()
+        return [sp["name"] for sp in self.app.cfg.get("subprofiles", [])]
+
     def open_subprofiles(self):
         dlg = SubprofileManager(self.app, self.app.cfg)
         self.app.wait_window(dlg)
@@ -1926,7 +1963,8 @@ class RsView(ttk.Frame):
             dlg = RsActionDialog(app, title, start, [s["name"] for s in app.cfg["sequences"]],
                                  app._all_profile_names(), self.pick_key, share=share,
                                  edit_seqs=self.edit_sequences,
-                                 subprofiles=None if sub else [sp["name"] for sp in app.cfg.get("subprofiles", [])])
+                                 subprofiles=None if sub else [sp["name"] for sp in app.cfg.get("subprofiles", [])],
+                                 edit_subs=self.edit_subprofiles)
             app.wait_window(dlg)
             cols, profiles = dlg.result, (dlg.profiles if share else None)   # без блока — другие не трогать
         if not cols:
@@ -1938,6 +1976,14 @@ class RsView(ttk.Frame):
                                         if profiles is not None else set())
         app.set_hint(f"{input_name(app.cfg, b)}: действия сохранены" +
                      (" (и в профилях: %s)." % ", ".join(done) if done else "."))
+        one = cols["single"]
+        if not sub and one.get("enabled") and one.get("kind") == "sub" and one.get("subprofile"):
+            # сразу к кнопкам подпрофиля: щелчок по плитке назначает клавиши уже в нём
+            self.set_sub(one["subprofile"])
+            self.nb.select(0)
+            self.refresh()
+            app.set_hint(f"Теперь щёлкайте кнопки на плитках — они назначаются в подпрофиль «{one['subprofile']}» "
+                         f"(клавиши, сочетания, перебор…). Вернуться к профилю — поле «Назначения».")
 
     def pick_key(self):
         """Окно выбора клавиши поверх текущего диалога; после — вернуть диалогу модальность."""

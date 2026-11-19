@@ -595,8 +595,7 @@ def test_560_subprofile_by_axis_and_overlay(app):
     ax = rv.axis_binding(6, "+", 0.5)
     app.rs.open_dialog(ax, cols={"single": dict(off, enabled=True, name="Оружие", kind="sub",
                                                 subprofile="Выбор оружия"), "long": off, "release": off})
-    app.rs.refresh()
-    app.rs.set_sub("Выбор оружия")
+    assert app.rs.cur_sub() == "Выбор оружия"            # после OK плитки — сразу кнопки подпрофиля
     app.rs.open_dialog(rv.btn_binding(0), cols={"single": dict(off, enabled=True, name="След. оружие", key="Q"),
                                                 "long": off, "release": off})
     assert rv.find_slots(app.cfg, rv.btn_binding(0), 0, "Выбор оружия")["single"]["keys"] == ["Q"]
