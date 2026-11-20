@@ -42,7 +42,7 @@ xvfb-run -a python -m pytest -q
 Поднимите `APP_VERSION` в `x52_ac8_launcher.py` и поставьте тег с той же версией:
 
 ```
-git tag v5.6.6 && git push origin v5.6.6
+git tag v5.6.7 && git push origin v5.6.7
 ```
 
 GitHub Actions соберёт установщик на Windows и выложит его в Releases.

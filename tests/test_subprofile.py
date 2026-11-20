@@ -311,3 +311,39 @@ def test_start_scenario_button_activator_held():
     s.run(50)
     s.axes[4] = 0.8
     assert s.run(800) == set()
+
+
+def test_copy_subprofile_to_other_profile():
+    """5.6.7: подпрофиль целиком (кнопки, включатель, последовательности, порог) копируется в другой профиль
+    и там работает так же; переименование заменяет старую копию, drop_sub — убирает."""
+    import x52_rsview as rv
+    src = _start_cfg({"type": "axis", "index": 3, "dir": "+", "thr": 0.5})
+    rv.set_axis_thr(src, 3, "+", 0.3)
+    dst = c.sanitize_config(dict(c.default_config(), profile_name="Посадка"))
+    off = {"enabled": False}                                       # на крутилке 1 в «Посадке» было своё
+    rv.apply_slots(dst, {"type": "axis", "index": 3, "dir": "+", "thr": 0.5}, 0,
+                   {"single": _col(name="Свет", key="L"), "long": off, "release": off})
+    assert rv.put_sub(dst, rv.sub_bundle(src, "Запуск"))
+    dst = c.sanitize_config(dst)
+    assert [sp["name"] for sp in dst["subprofiles"]] == ["Запуск"]
+    assert {q["name"] for q in dst["sequences"]} >= {"Запуск", "Глушить"}
+    assert rv.axis_thr(dst, 3, "+") == 0.3
+    assert not any(ca["name"] == "Свет" for ca in dst["custom_actions"])   # включатель занял крутилку 1
+    s = Sim(dst)
+    s.axes[3] = 0.8
+    s.run(20)
+    assert s.m.subprofile == "Запуск"
+    s.axes[4] = 0.8
+    assert _keys_seen(s, 900) == [frozenset(st["keys"]) for st in START]
+    # переименовали в исходном — копия заменяется, а не дублируется
+    src["subprofiles"][0]["name"] = "Старт"
+    for ca in src["custom_actions"]:
+        ca["sub"] = "Старт" if ca.get("sub") == "Запуск" else ca.get("sub", "")
+        ca["subprofile"] = "Старт" if ca.get("subprofile") == "Запуск" else ca.get("subprofile", "")
+    rv.put_sub(dst, rv.sub_bundle(src, "Старт"), "Запуск")
+    dst = c.sanitize_config(dst)
+    assert [sp["name"] for sp in dst["subprofiles"]] == ["Старт"]
+    assert len([ca for ca in dst["custom_actions"] if ca["mode"] == "subprofile"]) == 1
+    rv.drop_sub(dst, "Старт")
+    dst = c.sanitize_config(dst)
+    assert not dst["subprofiles"] and not any(ca["mode"] == "subprofile" or ca["sub"] for ca in dst["custom_actions"])

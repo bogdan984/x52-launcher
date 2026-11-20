@@ -83,7 +83,7 @@ from x52_core import (  # noqa: E402
 import x52_ministick  # noqa: E402
 
 APP_NAME = "X52 Launcher"
-APP_VERSION = "5.6.6"
+APP_VERSION = "5.6.7"
 # Собранный exe (PyInstaller): программа в Program Files (только чтение), настройки — в %APPDATA%.
 FROZEN = bool(getattr(sys, "frozen", False))
 APP_DIR = os.path.dirname(sys.executable if FROZEN else os.path.abspath(__file__))
@@ -3508,6 +3508,34 @@ class App(tk.Tk):
                 x52_rsview.apply_slots(c, b, layer, cols)
             else:
                 x52_rsview.apply_slots(c, b, layer, {s: dict(off) for s in x52_rsview.SLOTS})
+            try:
+                write_json_atomic(profile_path(n), sanitize_config(c))
+                done.append(n)
+            except OSError as e:
+                log_error(f"Не удалось записать профиль {n}: {e}")
+        return done
+
+    def rs_profiles_with_subs(self):
+        """{профиль: [имена подпрофилей]} для остальных профилей."""
+        return {n: [sp["name"] for sp in c.get("subprofiles", [])] for n, c in self.rs_other_profiles()}
+
+    def rs_sync_subprofile(self, bundle, old_name, to_set, to_clear):
+        """Подпрофиль bundle (x52_rsview.sub_bundle) — записать в профили to_set (заменив прежний с тем же
+        или старым именем old_name), из профилей to_clear — убрать. Возвращает имена записанных профилей."""
+        done = []
+        for n in list_profiles():
+            if n == self.cfg["profile_name"] or (n not in to_set and n not in to_clear):
+                continue
+            c = self._load_config(profile_path(n), silent=True)
+            if c is None:
+                continue
+            c["profile_name"] = n
+            if n in to_set and bundle is not None:
+                if not x52_rsview.put_sub(c, bundle, old_name):
+                    log_error(f"Профиль {n}: слишком много подпрофилей")
+                    continue
+            else:
+                x52_rsview.drop_sub(c, old_name)
             try:
                 write_json_atomic(profile_path(n), sanitize_config(c))
                 done.append(n)

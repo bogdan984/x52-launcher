@@ -890,6 +890,53 @@ def test_564_subprofile_keyless_add_new_sequence_real_windows(app, monkeypatch):
     os.remove(app.L.profile_path("Взлёт3"))
     app.refresh_profiles()
 
+def test_567_subprofile_simple_seq_and_copy_to_profiles(app, monkeypatch):
+    """5.6.7: последовательность выбирается прямо в окне подпрофилей («Сохранить», без других окон);
+    галочка профиля — при «Закрыть» подпрофиль копируется туда, снятая — убирается."""
+    import x52_rsview as rv
+    app.create_profile("Посадка7", "dcs")
+    app.create_profile("Взлёт7", "dcs")
+    app.cfg["sequences"].append({"name": "Запуск", "steps": [{"keys": ["HOME"], "delay_ms": 0, "duration_ms": 100}]})
+    monkeypatch.setattr(rv.messagebox, "askyesno", lambda *a, **k: True)
+    mgr = rv.SubprofileManager(app, app.cfg, view=app.rs)
+    assert "Посадка7" in mgr.prof_vars and "Взлёт7" not in mgr.prof_vars
+    mgr.new_sub("Запуск")
+    assert mgr._set_activator(rv.axis_binding(3, "+", 0.5))
+    ax = rv.axis_binding(4, "+", 0.5)
+    mgr._set_input(ax)
+    mgr._input_picked(ax)
+    assert mgr.b_name.get() == rv.input_name(app.cfg, ax)
+    mgr.kind.set("seq")
+    mgr._kind_changed()
+    assert mgr.seq_row.winfo_manager() == "grid" and mgr.key.winfo_manager() == ""
+    assert "Запуск" in mgr.seq.cget("values")
+    mgr.seq.set("Запуск")
+    mgr.save_btn()
+    ca = rv.find_slots(app.cfg, ax, 0, "Запуск")["single"]
+    assert ca["mode"] == "sequence" and ca["seq"] == "Запуск"
+    mgr._input_picked(ax)                                     # тот же вход — открывается его строка
+    pump(app, 0.1)
+    assert mgr.tv.selection() and mgr.kind.get() == "seq" and mgr.seq.get() == "Запуск"
+    mgr.prof_vars["Посадка7"].set(True)
+    mgr._ticks_changed()
+    mgr.close()
+    other = app._load_config(app.L.profile_path("Посадка7"), silent=True)
+    assert [sp["name"] for sp in other["subprofiles"]] == ["Запуск"]
+    assert rv.find_slots(other, ax, 0, "Запуск")["single"]["seq"] == "Запуск"
+    assert rv.find_slots(other, rv.axis_binding(3, "+", 0.5))["single"]["mode"] == "subprofile"
+    mgr = rv.SubprofileManager(app, app.cfg, view=app.rs)        # галочка стоит; снять — убрать
+    assert mgr.prof_vars["Посадка7"].get()
+    mgr.prof_vars["Посадка7"].set(False)
+    mgr._ticks_changed()
+    mgr.close()
+    other = app._load_config(app.L.profile_path("Посадка7"), silent=True)
+    assert not other["subprofiles"] and not any(x["mode"] == "subprofile" for x in other["custom_actions"])
+    app.switch_profile("ACE COMBAT 8")
+    for n in ("Посадка7", "Взлёт7"):
+        os.remove(app.L.profile_path(n))
+    app.refresh_profiles()
+
+
 def test_559_profile_cycle_copied_to_profiles(app):
     import x52_rsview as rv
     for n in ("Круг-1", "Круг-2", "Круг-3"):
@@ -2846,3 +2893,4 @@ def test_500_selftest_mode_writes_result(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "vgamepad", types.SimpleNamespace(
         VX360Gamepad=lambda: (_ for _ in ()).throw(OSError("нет ViGEmBus")), XUSB_BUTTON=_B))
     assert L.run_selftest(str(res)) == 1 and "нет ViGEmBus" in res.read_text(encoding="utf-8")
+

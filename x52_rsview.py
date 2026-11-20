@@ -253,6 +253,62 @@ def apply_slots(cfg, b, layer, cols, sub=""):
             ca[k] = tmp[k]
 
 
+def _is_activator(ca, name):
+    return ca["mode"] == "subprofile" and not ca.get("sub") and ca.get("subprofile") == name
+
+
+def sub_bundle(cfg, name):
+    """Подпрофиль name целиком (оверлей, кнопки, включатель, последовательности, пороги осей) — для копии
+    в другие профили. None — такого нет."""
+    sp = next((x for x in cfg.get("subprofiles", []) if x["name"] == name), None)
+    if sp is None:
+        return None
+    acts = [{k: v for k, v in ca.items() if k != "id"} for ca in cfg["custom_actions"]
+            if ca.get("sub") == name or _is_activator(ca, name)]
+    seqs = {ca.get("seq") for ca in acts if ca.get("seq")}
+    thr = {name_key(b): axis_thr(cfg, b["index"], b["dir"])
+           for ca in acts for b in ca["bindings"] if b and b["type"] == "axis"}
+    return json.loads(json.dumps({"sub": sp, "actions": acts, "axis_thr": thr,
+                                  "sequences": [q for q in cfg["sequences"] if q["name"] in seqs]}))
+
+
+def drop_sub(cfg, name):
+    """Убрать подпрофиль name из профиля (вместе с его кнопками и включателем)."""
+    cfg["subprofiles"] = [x for x in cfg.get("subprofiles", []) if x["name"] != name]
+    cfg["custom_actions"] = [ca for ca in cfg["custom_actions"]
+                             if ca.get("sub") != name and not _is_activator(ca, name)]
+
+
+def put_sub(cfg, bundle, old_name=None):
+    """Записать подпрофиль из sub_bundle в профиль cfg (прежний с тем же / старым именем заменяется).
+    На кнопке/оси-включателе прежнее действие «при нажатии» профиля снимается."""
+    name = bundle["sub"]["name"]
+    for n in {name, old_name or name}:
+        drop_sub(cfg, n)
+    if len(cfg.get("subprofiles", [])) >= MAX_SUBPROFILES:
+        return False
+    for ca in bundle["actions"]:
+        if ca.get("sub"):
+            continue
+        for b in [x for x in ca["bindings"] if x]:          # включатель: занять «при нажатии» этого входа
+            old = find_slots(cfg, b, ca["layer"]).get("single")
+            if old is not None:
+                pair = [x for x in old["bindings"] if x and not same_input(x, b)]
+                if pair:
+                    old["bindings"] = (pair + [None, None])[:2]
+                else:
+                    cfg["custom_actions"].remove(old)
+    cfg.setdefault("subprofiles", []).append(dict(bundle["sub"]))
+    for ca in bundle["actions"]:
+        cfg["custom_actions"].append(dict(json.loads(json.dumps(ca)), id=new_custom_id(cfg)))
+    for q in bundle["sequences"]:
+        cfg["sequences"] = [x for x in cfg["sequences"] if x["name"] != q["name"]] + [dict(q)]
+    for k, v in bundle["axis_thr"].items():
+        i, d = k[1:].split(":")
+        set_axis_thr(cfg, int(i), d, v)
+    return True
+
+
 def slot_signature(cfg, b, layer=0):
     """Что назначено на вход b (по слотам) — для сравнения одной и той же кнопки в разных профилях."""
     return {slot: ca_signature(ca) for slot, ca in find_slots(cfg, b, layer).items()}
@@ -1241,7 +1297,22 @@ class SubprofileManager(tk.Toplevel):
         ttk.Label(ed, text="Название:").grid(row=2, column=0, sticky="w", padx=4)
         self.b_name = tk.StringVar()
         ttk.Entry(ed, textvariable=self.b_name, width=24).grid(row=2, column=1, columnspan=3, sticky="w")
-        ttk.Label(ed, text="Модификатор:").grid(row=3, column=0, sticky="w", padx=4)
+        # что делает кнопка — прямо здесь: клавиша или последовательность (без лишних окон)
+        kf = ttk.Frame(ed)
+        kf.grid(row=2, column=4, columnspan=2, sticky="w", padx=(8, 0))
+        self.kind = tk.StringVar(value="key")
+        for v, t in (("key", "Клавиша"), ("seq", "Последовательность")):
+            ttk.Radiobutton(kf, text=t, value=v, variable=self.kind, command=self._kind_changed).pack(side="left")
+        self.seq_row = ttk.Frame(ed)
+        self.seq_row.grid(row=4, column=0, columnspan=6, sticky="w", padx=4)
+        ttk.Label(self.seq_row, text="Последовательность:").pack(side="left")
+        self.seq = ttk.Combobox(self.seq_row, state="readonly", width=28, height=20)
+        self.seq.pack(side="left", padx=4)
+        ttk.Button(self.seq_row, text="Создать / изменить…", command=self._edit_seqs).pack(side="left")
+        self.seq_hold = tk.BooleanVar()
+        ttk.Checkbutton(self.seq_row, text="только пока держите", variable=self.seq_hold).pack(side="left", padx=6)
+        mod_l = ttk.Label(ed, text="Модификатор:")
+        mod_l.grid(row=3, column=0, sticky="w", padx=4)
         mf = ttk.Frame(ed)
         mf.grid(row=3, column=1, columnspan=5, sticky="w")
         self.mods = {}
@@ -1249,10 +1320,12 @@ class SubprofileManager(tk.Toplevel):
             v = tk.BooleanVar()
             ttk.Checkbutton(mf, text=MOD_LABEL[k], variable=v).pack(side="left")
             self.mods[k] = v
-        ttk.Label(ed, text="Клавиша:").grid(row=4, column=0, sticky="w", padx=4)
+        key_l = ttk.Label(ed, text="Клавиша:")
+        key_l.grid(row=4, column=0, sticky="w", padx=4)
         self.key = ttk.Combobox(ed, state="readonly", width=16, values=[key_text(k) for k in PLAIN_KEYS])
         self.key.grid(row=4, column=1, sticky="w")
-        ttk.Button(ed, text="…", width=3, command=self._capture).grid(row=4, column=2, sticky="w")
+        key_b = ttk.Button(ed, text="…", width=3, command=self._capture)
+        key_b.grid(row=4, column=2, sticky="w")
         rf = ttk.Frame(ed)
         rf.grid(row=5, column=0, columnspan=6, sticky="w", padx=2, pady=(2, 0))
         self.rep = tk.BooleanVar()
@@ -1265,27 +1338,139 @@ class SubprofileManager(tk.Toplevel):
         ttk.Spinbox(rf, from_=0, to=HOLD_DELAY_MAX_MS, increment=100, width=6, textvariable=self.hold_ms).pack(
             side="left", padx=(4, 0))
         ttk.Label(rf, text="мс").pack(side="left", padx=(4, 0))
+        self._key_w = (mod_l, mf, key_l, self.key, key_b, rf)
         ttk.Label(ed, foreground="#555", wraplength=520, justify="left",
-                  text="Без галочек — одно нажатие клавиши. Клавиша не выбрана — «Добавить» откроет "
-                       "«Другие действия…» (последовательность, перебор…).").grid(
+                  text="1) «Нажать на X52…» и нажмите кнопку / двиньте ось.  2) Клавиша или последовательность.  "
+                       "3) «Сохранить».  Долгое нажатие, перебор по кругу — «Другие действия…».").grid(
             row=6, column=0, columnspan=6, sticky="w", padx=4)
         be = ttk.Frame(ed)
         be.grid(row=7, column=0, columnspan=6, sticky="w", padx=4, pady=6)
-        ttk.Button(be, text="Добавить", command=self.add_btn).pack(side="left")
-        ttk.Button(be, text="Сохранить изменения", command=self.update_btn).pack(side="left", padx=4)
-        ttk.Button(be, text="Удалить", command=self.delete_btn).pack(side="left")
+        ttk.Button(be, text="Сохранить", command=self.save_btn).pack(side="left")
+        ttk.Button(be, text="Удалить", command=self.delete_btn).pack(side="left", padx=4)
         if view is not None:
             ttk.Button(be, text="Другие действия…", command=self.more_btn).pack(side="left", padx=(12, 0))
-        ttk.Button(self, text="Закрыть", command=self.destroy).pack(side="bottom", anchor="e", padx=6, pady=6)
+        # в каких ещё профилях этот подпрофиль (копия; пишется в файлы профилей при «Закрыть»)
+        self._share = []                        # [[sp, имя при открытии, снимок, профили при открытии, профили]]
+        self.prof_vars = {}
+        others = self._other_profiles()
+        if others:
+            pf = ttk.LabelFrame(right, text="Этот подпрофиль есть и в профилях (копия — при «Закрыть»)")
+            pf.pack(fill="x", pady=(6, 0))
+            row = ttk.Frame(pf)
+            row.pack(fill="x", padx=6, pady=4)
+            for i, n in enumerate(others):
+                v = tk.BooleanVar()
+                ttk.Checkbutton(row, text=n, variable=v, command=self._ticks_changed).grid(
+                    row=i // 4, column=i % 4, sticky="w", padx=(0, 14))
+                self.prof_vars[n] = v
+            with_sub = self.app.rs_profiles_with_subs()
+            for sp in self._subs():
+                have = {n for n in others if sp["name"] in with_sub.get(n, ())}
+                self._share.append([sp, sp["name"], sub_bundle(cfg, sp["name"]), have, set(have)])
+        ttk.Button(self, text="Закрыть", command=self.close).pack(side="bottom", anchor="e", padx=6, pady=6)
+        self.protocol("WM_DELETE_WINDOW", self.close)
         self._press_job = None
         self._live_job = None
         self._axes0 = None                      # положение осей при открытии — для строки «Сейчас…»
         self._press_for = "inp"
         self.bind("<Destroy>", lambda e: e.widget is self and self._stop_press())
+        self.inp.bind("<<ComboboxSelected>>", lambda e: self._input_picked(self._sel_input()), add="+")
+        self._seq_values()
+        self._kind_changed()
         self._input_changed()
         self._live()
         self._refresh(0)
         self.grab_set()
+
+    # ---- клавиша или последовательность — прямо в этом окне
+    def _seq_values(self):
+        names = [q["name"] for q in self.cfg["sequences"]]
+        self.seq.configure(values=names)
+        if self.seq.get() not in names:
+            self.seq.set("")
+        return names
+
+    def _kind_changed(self):
+        seq = self.kind.get() == "seq"
+        for w in self._key_w:
+            w.grid_remove() if seq else w.grid()
+        self.seq_row.grid() if seq else self.seq_row.grid_remove()
+
+    def _edit_seqs(self):
+        """«Создать / изменить…»: окно последовательностей; новая или выделенная там — сразу выбрана."""
+        if self.view is None:
+            return
+        before = list(self.seq.cget("values"))
+        names = self.view.edit_sequences()
+        self.grab_set()
+        self._seq_values()
+        new = [n for n in names if n not in before]
+        picked = getattr(self.view, "seq_picked", None)
+        pick = new[-1] if new else (picked if picked in names else None)
+        if pick:
+            self.seq.set(pick)
+
+    def _input_picked(self, b):
+        """Выбрали вход (список / «Нажать на X52…»): уже есть в подпрофиле — открыть его строку,
+        иначе — новая строка."""
+        if b is None:
+            return
+        for iid, x in self._rows.items():
+            if same_input(x, b):
+                self.tv.selection_set(iid)
+                self.tv.see(iid)
+                return
+        self.tv.selection_remove(*self.tv.selection())
+        self.b_name.set(input_name(self.cfg, b))
+
+    def save_btn(self):
+        """«Сохранить»: добавить вход в подпрофиль или перезаписать его."""
+        r = self._check(False)
+        if r == "more":
+            self.more_btn()
+        elif r:
+            self._write(*r)
+
+    # ---- в каких ещё профилях этот подпрофиль
+    def _other_profiles(self):
+        if self.view is None or not hasattr(self.app, "rs_profiles_with_subs"):
+            return []
+        return [n for n in self.app._all_profile_names() if n != self.cfg["profile_name"]]
+
+    def _share_entry(self, sp):
+        return next((e for e in self._share if e[0] is sp), None)
+
+    def _load_ticks(self):
+        e = self._share_entry(self._cur()) if self._cur() is not None else None
+        for n, v in self.prof_vars.items():
+            v.set(bool(e) and n in e[4])
+
+    def _ticks_changed(self):
+        e = self._share_entry(self._cur()) if self._cur() is not None else None
+        if e is None:
+            self._load_ticks()
+            return
+        e[4] = {n for n, v in self.prof_vars.items() if v.get()}
+
+    def sync_profiles(self):
+        """Скопировать подпрофили в отмеченные профили (если его меняли или галочку поставили),
+        из снятых — убрать. Возвращает имена записанных профилей."""
+        done = set()
+        for sp, name0, snap0, have0, want in self._share:
+            if sp not in self._subs():
+                continue                        # удалён здесь — в других профилях не трогаем
+            now = sub_bundle(self.cfg, sp["name"])
+            to_set = want if now != snap0 else want - have0
+            to_clear = have0 - want
+            if to_set or to_clear:
+                done |= set(self.app.rs_sync_subprofile(now, name0, to_set, to_clear))
+        return sorted(done)
+
+    def close(self):
+        done = self.sync_profiles() if self._share else []
+        if done and self.view is not None:
+            self.app.set_hint("Подпрофили скопированы в профили: %s." % ", ".join(done))
+        self.destroy()
 
     # ---- список подпрофилей и настройки оверлея
     def _subs(self):
@@ -1315,6 +1500,7 @@ class SubprofileManager(tk.Toplevel):
         self._preview()
         self._load_act()
         self._refresh_btns()
+        self._load_ticks()
 
     def _fields(self):
         try:
@@ -1381,6 +1567,8 @@ class SubprofileManager(tk.Toplevel):
                                    "Подпрофиль «%s» уже есть." % name, parent=self)
             return
         self._subs().append({"name": name, "icon": "", "size": 22, "color": SUB_COLOR})
+        if self.prof_vars:
+            self._share.append([self._subs()[-1], name, None, set(), set()])
         self.changed = True
         self._refresh(len(self._subs()) - 1)
 
@@ -1530,6 +1718,11 @@ class SubprofileManager(tk.Toplevel):
         self.rep_ms.set(str(col["repeat_ms"]))
         self.cont.set(col["continuous"])
         self.hold_ms.set(str(col["hold_delay_ms"] if col["continuous"] else 0))
+        self.kind.set("seq" if col.get("kind") == "seq" and col.get("seq") else "key")
+        self._seq_values()
+        self.seq.set(col.get("seq", "") if self.kind.get() == "seq" else "")
+        self.seq_hold.set(bool(col.get("seq_hold")))
+        self._kind_changed()
 
     def _capture(self):
         r = self.view.pick_key() if self.view is not None else None
@@ -1623,8 +1816,7 @@ class SubprofileManager(tk.Toplevel):
             self._set_activator(b)
             return
         self._set_input(b)
-        if not self.b_name.get().strip():
-            self.b_name.set(input_name(self.cfg, b))
+        self._input_picked(b)
 
     def _stop_press(self):
         for j in ("_press_job", "_live_job"):
@@ -1645,7 +1837,9 @@ class SubprofileManager(tk.Toplevel):
                 "mods": [k for k, v in self.mods.items() if v.get()],
                 "key": PLAIN_KEYS[names.index(kt)] if kt in names else "", "repeat": bool(self.rep.get()),
                 "repeat_ms": num(self.rep_ms, 100, 30, 2000), "continuous": bool(self.cont.get()),
-                "hold_delay_ms": num(self.hold_ms, 0, 0, HOLD_DELAY_MAX_MS)}
+                "hold_delay_ms": num(self.hold_ms, 0, 0, HOLD_DELAY_MAX_MS),
+                **({"kind": "seq", "seq": self.seq.get(), "seq_hold": bool(self.seq_hold.get())}
+                   if self.kind.get() == "seq" else {})}
 
     def _write(self, b, col):
         """Записать «при нажатии» входа b в подпрофиль (долгое/отпускание, если были, остаются)."""
@@ -1668,7 +1862,12 @@ class SubprofileManager(tk.Toplevel):
                                    "«Сохранить изменения»." % input_name(self.cfg, b), parent=self)
             return None
         col = self._editor_col()
-        if not col["key"]:
+        if col["kind"] == "seq":
+            if not col["seq"]:
+                messagebox.showwarning("Подпрофиль", "Выберите последовательность (или «Создать / изменить…»).",
+                                       parent=self)
+                return None
+        elif not col["key"]:
             return "more"
         return b, col
 
